@@ -23,6 +23,12 @@ from mcrl import MinecraftEnv, EnvConfig
 from mcrl.core.state import GameState
 from mcrl.training.config import TrainConfig
 from mcrl.training.networks import ActorCritic, create_network, init_network
+from mcrl.training.networks_fast import (
+    FastActorCritic, 
+    create_fast_network, 
+    init_fast_network,
+    count_params,
+)
 from mcrl.training.ppo import (
     compute_gae, 
     ppo_loss, 
@@ -93,7 +99,7 @@ class Metrics:
 def create_train_state(
     config: TrainConfig,
     key: jax.random.PRNGKey,
-) -> Tuple[TrainState, ActorCritic]:
+):
     """
     Create initial training state.
     
@@ -105,19 +111,23 @@ def create_train_state(
         train_state: Initialized TrainState
         network: Network module (for apply calls)
     """
-    # Create network
-    network = create_network(config.network, num_actions=25)
-    
-    # Initialize parameters
-    obs_shapes = {
-        'local_voxels': (17, 17, 17),
-        'inventory': (16,),
-        'player_state': (14,),
-        'facing_blocks': (8,),
-    }
-    
     key, init_key = jax.random.split(key)
-    params = init_network(network, init_key, obs_shapes)
+    
+    # Create network - use fast network if configured
+    if getattr(config, 'use_fast_network', False):
+        network = create_fast_network(num_actions=25)
+        params = init_fast_network(network, init_key)
+        print(f"Using FastActorCritic ({count_params(params):,} params)")
+    else:
+        network = create_network(config.network, num_actions=25)
+        obs_shapes = {
+            'local_voxels': (17, 17, 17),
+            'inventory': (16,),
+            'player_state': (14,),
+            'facing_blocks': (8,),
+        }
+        params = init_network(network, init_key, obs_shapes)
+        print(f"Using ActorCritic ({count_params(params):,} params)")
     
     # Create optimizer with learning rate schedule
     if config.ppo.lr_schedule == 'linear':
@@ -134,9 +144,9 @@ def create_train_state(
         optax.adam(learning_rate=lr_schedule, eps=1e-5),
     )
     
-    train_state = TrainState.create(params, optimizer)
+    ts = TrainState.create(params, optimizer)
     
-    return train_state, network
+    return ts, network
 
 
 def collect_rollout(

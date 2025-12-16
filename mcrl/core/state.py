@@ -19,10 +19,12 @@ class WorldState:
     
     Attributes:
         blocks: 3D array of block types [W, H, D], uint8
+        padded_blocks: Padded version for fast observation extraction
         tick: Current game tick
         seed: World seed for procedural generation
     """
     blocks: jnp.ndarray  # [W, H, D] uint8
+    padded_blocks: jnp.ndarray  # [W+16, H+16, D+16] uint8 - padded for fast obs
     tick: jnp.int32
     seed: jnp.uint32
     

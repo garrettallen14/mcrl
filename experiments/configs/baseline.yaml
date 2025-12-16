@@ -1,23 +1,26 @@
-# MCRL Baseline Configuration
-# Standard PPO training for diamond task
+# MCRL Baseline Configuration - OPTIMIZED FOR RTX 5090 (32GB)
+# Standard PPO training for diamond task with fast network
 
 # Environment
-world_size: [128, 128, 128]
+world_size: [64, 64, 64]  # 64³ for speed, 128³ for realism
 max_episode_ticks: 18000  # 15 min @ 20Hz
 
-# Training scale
-num_envs: 2048
-num_steps: 256
-num_minibatches: 8
+# Training scale - OPTIMIZED FOR RTX 5090
+num_envs: 4096            # 5090 can handle 4096+ envs easily
+num_steps: 256            # Longer rollouts for better GAE
+num_minibatches: 8        # batch=4096*256, minibatch=131k
 update_epochs: 4
-total_timesteps: 100000000  # 100M
+total_timesteps: 100000000  # 100M steps
+
+# Use optimized network (4x fewer params, 3x faster)
+use_fast_network: true
 
 # Random seed
 seed: 42
-run_name: ppo_baseline
+run_name: ppo_5090_optimized
 output_dir: experiments/runs
 
-# Network architecture
+# Network architecture (only used if use_fast_network=false)
 network:
   num_block_types: 256
   embed_dim: 64
@@ -32,13 +35,13 @@ network:
 ppo:
   lr: 0.0003
   lr_schedule: linear
-  gamma: 0.999
+  gamma: 0.999             # High for long-horizon diamond task
   gae_lambda: 0.95
   clip_eps: 0.2
   clip_value: true
   vf_coef: 0.5
-  ent_coef: 0.01
-  ent_coef_final: 0.001
+  ent_coef: 0.02           # Start higher for exploration
+  ent_coef_final: 0.005    # Anneal to lower for exploitation
   ent_decay_steps: 50000000
   max_grad_norm: 0.5
   normalize_advantages: true
@@ -49,8 +52,8 @@ exploration:
   use_intrinsic: true
   intrinsic_coef: 0.5
   intrinsic_decay: 0.9999
-  random_action_prob: 0.0
-  random_action_decay_steps: 2000000
+  random_action_prob: 0.05  # 5% random actions initially
+  random_action_decay_steps: 10000000
   max_visit_count: 100000
 
 # Logging

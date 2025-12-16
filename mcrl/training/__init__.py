@@ -12,8 +12,10 @@ from mcrl.training.config import (
     get_baseline_config,
     get_high_explore_config,
     get_large_scale_config,
+    get_rtx4090_config,
 )
 from mcrl.training.networks import VoxelEncoder, ActorCritic
+from mcrl.training.networks_fast import FastActorCritic, FastVoxelEncoder
 from mcrl.training.ppo import ppo_loss, compute_gae
 from mcrl.training.train import train, create_train_state
 
@@ -23,6 +25,8 @@ __all__ = [
     "NetworkConfig",
     "VoxelEncoder",
     "ActorCritic",
+    "FastActorCritic",
+    "FastVoxelEncoder",
     "ppo_loss",
     "compute_gae",
     "train",
@@ -31,4 +35,5 @@ __all__ = [
     "get_baseline_config",
     "get_high_explore_config",
     "get_large_scale_config",
+    "get_rtx4090_config",
 ]

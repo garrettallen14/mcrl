@@ -76,12 +76,11 @@ target-version = "py310"
 select = ["E", "F", "I", "W"]
 ignore = ["E501"]
 
-# UV configuration
-[tool.uv]
-dev-dependencies = [
+# Development dependency group (uv 0.9+ format)
+[dependency-groups]
+dev = [
     "pytest>=7.0.0",
     "ruff>=0.1.0",
 ]
 
-# Index for CUDA JAX (use: uv pip install --extra-index-url)
-# For CUDA 12: pip install -U "jax[cuda12]"
+# For CUDA 12: uv pip install -U "jax[cuda12]"

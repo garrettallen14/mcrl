@@ -17,8 +17,26 @@ from mcrl.core.types import (
     BLOCK_TOOL_REQUIREMENTS, TOOL_PROPERTIES,
 )
 from mcrl.core.state import GameState, WorldState
-from mcrl.core.constants import PLAYER_EYE_HEIGHT, PLAYER_REACH
+from mcrl.core.constants import PLAYER_EYE_HEIGHT, PLAYER_REACH, LOCAL_OBS_RADIUS
 from mcrl.systems.inventory import add_item, get_equipped_item
+
+
+def _update_world_block(world: WorldState, pos: jnp.ndarray, block_type: jnp.ndarray) -> WorldState:
+    """
+    Update a block in both blocks and padded_blocks arrays.
+    
+    This keeps the padded version in sync for fast observation extraction.
+    """
+    # Update main blocks array
+    new_blocks = world.blocks.at[pos[0], pos[1], pos[2]].set(block_type)
+    
+    # Update padded blocks array (offset by LOCAL_OBS_RADIUS)
+    pad = LOCAL_OBS_RADIUS
+    new_padded = world.padded_blocks.at[
+        pos[0] + pad, pos[1] + pad, pos[2] + pad
+    ].set(block_type)
+    
+    return world.replace(blocks=new_blocks, padded_blocks=new_padded)
 
 
 def raycast_block(
@@ -315,11 +333,12 @@ def process_mining(state: GameState) -> GameState:
     # Get drop
     drop_item, drop_count = get_block_drop(block_type)
     
-    # Update world (remove block)
-    new_blocks = jnp.where(
+    # Update world (remove block) - update both blocks and padded_blocks
+    new_world = jax.lax.cond(
         block_breaks,
-        world.blocks.at[hit_pos[0], hit_pos[1], hit_pos[2]].set(BlockType.AIR),
-        world.blocks
+        lambda w: _update_world_block(w, hit_pos, BlockType.AIR),
+        lambda w: w,
+        world
     )
     
     # Update inventory (add drop)
@@ -337,8 +356,7 @@ def process_mining(state: GameState) -> GameState:
     )
     new_mining_progress = jnp.where(block_breaks, 0, new_progress)
     
-    # Create updated states
-    new_world = world.replace(blocks=new_blocks)
+    # Create updated player state
     new_player = player.replace(
         inventory=new_inventory,
         mining_block=new_mining_block,
@@ -394,11 +412,12 @@ def place_block(state: GameState, item_type: int) -> GameState:
     
     can_place = hit & in_bounds & is_empty & has_block & (block_to_place != BlockType.AIR)
     
-    # Place block
-    new_blocks = jnp.where(
+    # Place block - update both blocks and padded_blocks
+    new_world = jax.lax.cond(
         can_place,
-        world.blocks.at[place_pos[0], place_pos[1], place_pos[2]].set(block_to_place),
-        world.blocks
+        lambda w: _update_world_block(w, place_pos, block_to_place),
+        lambda w: w,
+        world
     )
     
     # Remove from inventory
@@ -409,7 +428,6 @@ def place_block(state: GameState, item_type: int) -> GameState:
         player.inventory
     )
     
-    new_world = world.replace(blocks=new_blocks)
     new_player = player.replace(inventory=new_inventory)
     
     return state.replace(world=new_world, player=new_player)

@@ -41,6 +41,13 @@ if command -v nvidia-smi &> /dev/null; then
     echo "Installing JAX with CUDA support..."
     # Install CUDA JAX
     uv pip install -U "jax[cuda12]"
+    
+    # Set library path for CUDA libs installed via pip
+    SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+    export LD_LIBRARY_PATH="$SITE_PACKAGES/nvidia/cudnn/lib:$SITE_PACKAGES/nvidia/cuda_cupti/lib:$SITE_PACKAGES/nvidia/cuda_runtime/lib:$SITE_PACKAGES/nvidia/cublas/lib:$SITE_PACKAGES/nvidia/cufft/lib:$SITE_PACKAGES/nvidia/cusolver/lib:$SITE_PACKAGES/nvidia/cusparse/lib:$SITE_PACKAGES/nvidia/nccl/lib:$SITE_PACKAGES/nvidia/nvjitlink/lib:${LD_LIBRARY_PATH:-}"
+    
+    echo ""
+    echo "CUDA library path set."
 else
     echo "No NVIDIA GPU detected. Using CPU JAX."
     echo "Note: Training will be very slow without GPU."
@@ -61,8 +68,8 @@ echo "============================================"
 echo "Setup Complete!"
 echo "============================================"
 echo ""
-echo "Activate the environment with:"
-echo "  source .venv/bin/activate"
+echo "Activate the environment with CUDA support:"
+echo "  source scripts/activate.sh"
 echo ""
 echo "Run preflight checks:"
 echo "  python experiments/scripts/preflight.py"

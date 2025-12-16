@@ -28,7 +28,12 @@ from mcrl.core.constants import (
 from mcrl.systems.world_gen import generate_world, find_spawn_position
 from mcrl.systems.physics import apply_physics
 from mcrl.systems.actions import process_action, Action
-from mcrl.utils.observations import get_full_observation, get_local_voxels, encode_inventory, get_player_state_vector
+from mcrl.utils.observations_fast import (
+    get_local_voxels_fast,
+    get_facing_blocks_fast,
+    encode_inventory_fast,
+    get_player_state_fast,
+)
 from mcrl.utils.rewards import calculate_milestone_reward, check_episode_done
 
 
@@ -39,6 +44,24 @@ class StepResult(NamedTuple):
     reward: jnp.ndarray
     done: jnp.ndarray
     info: dict
+
+
+def _get_observation_fast(state: GameState) -> dict:
+    """Fast observation extraction using optimized functions."""
+    return {
+        "local_voxels": get_local_voxels_fast(
+            state.world.padded_blocks, 
+            state.player.pos
+        ),
+        "facing_blocks": get_facing_blocks_fast(
+            state.world.blocks,
+            state.player.pos,
+            state.player.rot
+        ),
+        "inventory": encode_inventory_fast(state.player.inventory),
+        "player_state": get_player_state_fast(state.player),
+        "tick": state.world.tick,
+    }
 
 
 @struct.dataclass
@@ -112,8 +135,8 @@ class MinecraftEnv:
         # Create game state
         state = create_initial_game_state(world, player)
         
-        # Get initial observation
-        obs = get_full_observation(state)
+        # Get initial observation (fast path)
+        obs = _get_observation_fast(state)
         
         return state, obs
     
@@ -154,8 +177,8 @@ class MinecraftEnv:
         # Update done flag
         state = state.replace(done=done)
         
-        # Get observation
-        obs = get_full_observation(state)
+        # Get observation (fast path)
+        obs = _get_observation_fast(state)
         
         # Info dict
         info = {

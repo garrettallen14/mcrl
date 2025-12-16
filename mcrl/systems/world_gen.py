@@ -23,6 +23,7 @@ from mcrl.core.constants import (
     TREE_DENSITY,
     TREE_MIN_HEIGHT,
     TREE_MAX_HEIGHT,
+    LOCAL_OBS_RADIUS,
 )
 
 
@@ -212,8 +213,19 @@ def generate_world(
     # Place trees
     blocks = _place_trees_vectorized(k_tree, blocks, height_map)
     
+    # Create padded version for fast observation extraction
+    # Pad with BEDROCK on all sides
+    padding = LOCAL_OBS_RADIUS
+    padded_blocks = jnp.pad(
+        blocks,
+        ((padding, padding), (padding, padding), (padding, padding)),
+        mode='constant',
+        constant_values=BlockType.BEDROCK
+    )
+    
     return WorldState(
         blocks=blocks,
+        padded_blocks=padded_blocks,
         tick=jnp.int32(0),
         seed=key[0],
     )
