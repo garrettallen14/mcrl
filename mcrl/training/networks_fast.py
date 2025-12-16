@@ -206,6 +206,76 @@ class FastActorCritic(nn.Module):
         value = nn.Dense(1, kernel_init=orthogonal(1.0))(x)
         
         return logits, value.squeeze(-1)
+    
+    def get_action_and_value(
+        self,
+        obs: dict,
+        key: jax.random.PRNGKey,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Sample action and compute log prob + value.
+        
+        Args:
+            obs: Observation dict
+            key: Random key for sampling
+        
+        Returns:
+            action: (batch,) sampled actions
+            log_prob: (batch,) log probability of sampled actions
+            entropy: (batch,) policy entropy
+            value: (batch,) value estimate
+        """
+        logits, value = self(obs)
+        
+        # Categorical distribution
+        probs = jax.nn.softmax(logits)
+        log_probs = jax.nn.log_softmax(logits)
+        
+        # Sample action
+        action = jax.random.categorical(key, logits)
+        
+        # Log prob of sampled action
+        log_prob = log_probs[jnp.arange(log_probs.shape[0]), action]
+        
+        # Entropy
+        entropy = -(probs * log_probs).sum(axis=-1)
+        
+        return action, log_prob, entropy, value
+    
+    def get_value(self, obs: dict) -> jnp.ndarray:
+        """Get value estimate only (for bootstrapping)."""
+        _, value = self(obs)
+        return value
+    
+    def evaluate_actions(
+        self,
+        obs: dict,
+        actions: jnp.ndarray,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Evaluate log prob and entropy of given actions.
+        
+        Args:
+            obs: Observation dict
+            actions: (batch,) actions to evaluate
+        
+        Returns:
+            log_prob: (batch,) log probability of actions
+            entropy: (batch,) policy entropy
+            value: (batch,) value estimate
+        """
+        logits, value = self(obs)
+        
+        probs = jax.nn.softmax(logits)
+        log_probs = jax.nn.log_softmax(logits)
+        
+        # Log prob of given actions
+        log_prob = log_probs[jnp.arange(log_probs.shape[0]), actions]
+        
+        # Entropy
+        entropy = -(probs * log_probs).sum(axis=-1)
+        
+        return log_prob, entropy, value
 
 
 def create_fast_network(num_actions: int = 25) -> FastActorCritic:
