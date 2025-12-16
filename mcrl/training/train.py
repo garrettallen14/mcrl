@@ -146,7 +146,7 @@ def create_train_state(
     
     ts = TrainState.create(params, optimizer)
     
-    return ts, network
+    return ts, network, optimizer
 
 
 def collect_rollout(
@@ -212,11 +212,9 @@ def collect_rollout(
     
     train_state, env_state, last_obs, key = final_carry
     
-    # Unpack transitions
-    obs_list, actions, log_probs, values, rewards, dones = transitions
-    
-    # Stack observations (they're tuples from scan)
-    obs = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *obs_list)
+    # Unpack transitions - scan already stacks along axis 0 (time)
+    obs, actions, log_probs, values, rewards, dones = transitions
+    # obs is already a dict with shape (num_steps, num_envs, ...)
     
     trajectory = Trajectory(
         obs=obs,
@@ -247,6 +245,7 @@ def update_ppo(
     config: TrainConfig,
     key: jax.random.PRNGKey,
     ent_coef: float,
+    optimizer: optax.GradientTransformation,
 ) -> Tuple[TrainState, PPOMetrics]:
     """
     Perform PPO update with multi-epoch minibatch training.
@@ -259,6 +258,7 @@ def update_ppo(
         config: Training config
         key: Random key for shuffling
         ent_coef: Current entropy coefficient
+        optimizer: Optax optimizer for parameter updates
     
     Returns:
         train_state: Updated training state
@@ -360,8 +360,9 @@ def update_ppo(
             
             (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(train_state.params)
             
-            # Update parameters
-            updates, opt_state = optax.adam(config.ppo.lr).update(
+            # Update parameters using the optimizer from train_state
+            # Note: We use the same optimizer chain created in create_train_state
+            updates, opt_state = optimizer.update(
                 grads, train_state.opt_state, train_state.params
             )
             params = optax.apply_updates(train_state.params, updates)
@@ -451,7 +452,7 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
     env = MinecraftEnv(env_config)
     
     # Create network and training state
-    train_state, network = create_train_state(config, init_key)
+    train_state, network, optimizer = create_train_state(config, init_key)
     
     # Initialize environments
     print(f"Initializing {config.num_envs} environments...")
@@ -503,6 +504,7 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
             config,
             update_key,
             ent_coef,
+            optimizer,
         )
         runner_state = runner_state.replace(train_state=train_state)
         
