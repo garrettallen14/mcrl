@@ -111,12 +111,11 @@ class TrainConfig:
     world_size: Tuple[int, int, int] = (64, 64, 64)
     max_episode_ticks: int = 18000  # 15 min @ 20Hz
     
-    # Training scale - OPTIMIZED FOR RTX 5090 (32GB)
-    # Based on benchmark: 2048 envs = 231k steps/sec
-    # With optimizations, expect 500k-1M steps/sec
-    num_envs: int = 4096  # RTX 5090 can handle 4096+ envs
-    num_steps: int = 256  # Longer rollouts for better GAE estimates
-    num_minibatches: int = 8  # 4096*256/8 = 131k minibatch size
+    # Training scale - Conservative defaults that work on most GPUs
+    # Scale up based on your GPU memory (see presets below)
+    num_envs: int = 1024  # Safe for 24GB+ GPUs
+    num_steps: int = 128  # Shorter rollouts use less memory
+    num_minibatches: int = 8  # 1024*128/8 = 16k minibatch size
     update_epochs: int = 4
     total_timesteps: int = 100_000_000  # 100M steps target
     
@@ -223,11 +222,11 @@ def get_fast_debug_config() -> TrainConfig:
 
 
 def get_baseline_config() -> TrainConfig:
-    """Standard baseline for RTX 5090 (32GB)."""
+    """Standard baseline for 24-32GB GPUs."""
     return TrainConfig(
         world_size=(64, 64, 64),
-        num_envs=4096,
-        num_steps=256,
+        num_envs=1024,
+        num_steps=128,
         num_minibatches=8,
         total_timesteps=100_000_000,
         use_fast_network=True,
@@ -235,11 +234,11 @@ def get_baseline_config() -> TrainConfig:
 
 
 def get_high_explore_config() -> TrainConfig:
-    """High exploration for bootstrap phase on RTX 5090."""
+    """High exploration for bootstrap phase."""
     return TrainConfig(
         world_size=(64, 64, 64),
-        num_envs=4096,
-        num_steps=256,
+        num_envs=1024,
+        num_steps=128,
         num_minibatches=8,
         use_fast_network=True,
         ppo=PPOConfig(
@@ -257,16 +256,16 @@ def get_high_explore_config() -> TrainConfig:
 
 
 def get_large_scale_config() -> TrainConfig:
-    """Maximum scale config for RTX 5090 / A40 (32GB+)."""
+    """Large scale config for 48GB+ GPUs (A40, A100)."""
     return TrainConfig(
         world_size=(64, 64, 64),
-        num_envs=8192,  # Push to maximum
+        num_envs=2048,
         num_steps=256,
         num_minibatches=16,
-        total_timesteps=200_000_000,  # 200M steps
+        total_timesteps=200_000_000,
         use_fast_network=True,
         ppo=PPOConfig(
-            lr=2e-4,  # Slightly lower for stability at scale
+            lr=2e-4,
             gamma=0.999,
             ent_coef=0.02,
             ent_coef_final=0.005,
@@ -278,9 +277,9 @@ def get_rtx4090_config() -> TrainConfig:
     """Optimized config for RTX 4090 (24GB)."""
     return TrainConfig(
         world_size=(64, 64, 64),
-        num_envs=2048,
-        num_steps=256,
-        num_minibatches=8,
+        num_envs=512,
+        num_steps=128,
+        num_minibatches=4,
         total_timesteps=100_000_000,
         use_fast_network=True,
     )
