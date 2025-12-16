@@ -6,13 +6,14 @@
 world_size: [64, 64, 64]  # 64³ for speed, 128³ for realism
 max_episode_ticks: 18000  # 15 min @ 20Hz
 
-# Training scale - Conservative defaults (works on 24GB+ GPUs)
-# Increase num_envs if you have more VRAM
-num_envs: 1024            # Safe default, increase to 2048+ if you have 48GB+
-num_steps: 128            # Shorter rollouts use less memory  
-num_minibatches: 8        # batch=1024*128=131k, minibatch=16k
+# Training scale - Tuned for RTX 5090 (32GB)
+# Memory bottleneck is PPO update phase, not rollout collection
+num_envs: 2048            # More envs = faster rollout collection
+num_steps: 64             # Shorter rollouts = smaller PPO batch
+num_minibatches: 32       # More minibatches = smaller memory per gradient update
 update_epochs: 4
 total_timesteps: 100000000  # 100M steps
+# Batch = 2048*64 = 131k, Minibatch = 131k/32 = 4k (fits in memory)
 
 # Use optimized network (4x fewer params, 3x faster)
 use_fast_network: true
