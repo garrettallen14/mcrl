@@ -1,0 +1,66 @@
+# MCRL Baseline Configuration
+# Standard PPO training for diamond task
+
+# Environment
+world_size: [128, 128, 128]
+max_episode_ticks: 18000  # 15 min @ 20Hz
+
+# Training scale
+num_envs: 2048
+num_steps: 256
+num_minibatches: 8
+update_epochs: 4
+total_timesteps: 100000000  # 100M
+
+# Random seed
+seed: 42
+run_name: ppo_baseline
+output_dir: experiments/runs
+
+# Network architecture
+network:
+  num_block_types: 256
+  embed_dim: 64
+  cnn_channels: [64, 128, 256]
+  inventory_hidden: 128
+  state_hidden: 64
+  facing_hidden: 64
+  trunk_hidden: 512
+  activation: relu
+
+# PPO hyperparameters
+ppo:
+  lr: 0.0003
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  clip_value: true
+  vf_coef: 0.5
+  ent_coef: 0.01
+  ent_coef_final: 0.001
+  ent_decay_steps: 50000000
+  max_grad_norm: 0.5
+  normalize_advantages: true
+  clip_advantages: 10.0
+
+# Exploration
+exploration:
+  use_intrinsic: true
+  intrinsic_coef: 0.5
+  intrinsic_decay: 0.9999
+  random_action_prob: 0.0
+  random_action_decay_steps: 2000000
+  max_visit_count: 100000
+
+# Logging
+logging:
+  log_interval: 10
+  save_interval: 100
+  eval_interval: 50
+  profile_interval: 100
+  max_checkpoints: 5
+  save_best: true
+  use_wandb: false
+  wandb_project: mcrl
+  verbose: true

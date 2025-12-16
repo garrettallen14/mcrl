@@ -1,0 +1,87 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcrl"
+version = "0.1.0"
+description = "A JAX-native Minecraft environment for reinforcement learning"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Gary"},
+]
+keywords = ["reinforcement-learning", "minecraft", "jax", "rl", "environment"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "jax>=0.4.30",
+    "jaxlib>=0.4.30",
+    "flax>=0.8.0",
+    "optax>=0.2.0",
+    "chex>=0.1.80",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-benchmark",
+    "ruff>=0.1.0",
+]
+dashboard = [
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "jinja2>=3.1.0",
+    "websockets>=12.0",
+]
+train = [
+    "wandb>=0.16.0",
+    "tensorboard>=2.15.0",
+]
+all = [
+    "mcrl[dev,dashboard,train]",
+]
+
+[project.urls]
+Homepage = "https://github.com/gary/mc-rl"
+Repository = "https://github.com/gary/mc-rl"
+
+[project.scripts]
+mcrl-train = "experiments.scripts.train:main"
+mcrl-dashboard = "mcrl.dashboard.server:main"
+mcrl-benchmark = "benchmark:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcrl", "experiments"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+# UV configuration
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+]
+
+# Index for CUDA JAX (use: uv pip install --extra-index-url)
+# For CUDA 12: pip install -U "jax[cuda12]"

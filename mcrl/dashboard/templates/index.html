@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCRL Training Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <!-- Header -->
+    <header class="bg-gray-800 border-b border-gray-700 px-6 py-4">
+        <div class="flex items-center justify-between max-w-7xl mx-auto">
+            <div class="flex items-center gap-4">
+                <h1 class="text-2xl font-bold bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">
+                    MCRL Dashboard
+                </h1>
+                <div class="flex items-center gap-2">
+                    <div id="status-indicator" class="w-3 h-3 rounded-full animate-pulse bg-green-500"></div>
+                    <span id="status-text" class="text-sm text-gray-400">Connecting...</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-4 text-sm text-gray-400">
+                <span id="elapsed-time">00:00:00</span>
+                <span id="steps-count">0 steps</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-6 py-8">
+        <!-- Key Metrics -->
+        <section class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-8">
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <div class="text-sm text-gray-400 uppercase tracking-wide">Reward</div>
+                <div class="text-3xl font-bold text-white" id="metric-reward">--</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <div class="text-sm text-gray-400 uppercase tracking-wide">Steps/sec</div>
+                <div class="text-3xl font-bold text-white" id="metric-sps">--</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <div class="text-sm text-gray-400 uppercase tracking-wide">Entropy</div>
+                <div class="text-3xl font-bold text-white" id="metric-entropy">--</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <div class="text-sm text-gray-400 uppercase tracking-wide">KL Div</div>
+                <div class="text-3xl font-bold text-white" id="metric-kl">--</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <div class="text-sm text-gray-400 uppercase tracking-wide">Clip Frac</div>
+                <div class="text-3xl font-bold text-white" id="metric-clip">--</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <div class="text-sm text-gray-400 uppercase tracking-wide">Expl. Var</div>
+                <div class="text-3xl font-bold text-white" id="metric-expvar">--</div>
+            </div>
+        </section>
+
+        <!-- Milestone Progress -->
+        <section class="mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-200">Milestone Progress</h2>
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" id="milestones-container">
+                    <!-- Milestones will be populated by JS -->
+                </div>
+            </div>
+        </section>
+
+        <!-- Charts -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <h3 class="text-lg font-semibold mb-4 text-gray-200">Reward Over Time</h3>
+                <canvas id="reward-chart" height="200"></canvas>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <h3 class="text-lg font-semibold mb-4 text-gray-200">Training Metrics</h3>
+                <canvas id="metrics-chart" height="200"></canvas>
+            </div>
+        </section>
+
+        <!-- Losses -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <h3 class="text-lg font-semibold mb-4 text-gray-200">Policy Loss</h3>
+                <canvas id="policy-loss-chart" height="150"></canvas>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <h3 class="text-lg font-semibold mb-4 text-gray-200">Value Loss</h3>
+                <canvas id="value-loss-chart" height="150"></canvas>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // Milestone names
+        const MILESTONES = [
+            'log', 'planks', 'stick', 'crafting_table', 'wooden_pickaxe',
+            'cobblestone', 'stone_pickaxe', 'iron_ore', 'furnace',
+            'iron_ingot', 'iron_pickaxe', 'diamond'
+        ];
+
+        // Initialize milestones UI
+        function initMilestones() {
+            const container = document.getElementById('milestones-container');
+            MILESTONES.forEach((name, i) => {
+                const div = document.createElement('div');
+                div.innerHTML = `
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-sm text-gray-300 capitalize">${name.replace('_', ' ')}</span>
+                        <span class="text-sm text-gray-400" id="milestone-${name}-pct">0%</span>
+                    </div>
+                    <div class="h-2 rounded-full bg-gray-700 overflow-hidden">
+                        <div class="h-full bg-gradient-to-r from-green-500 to-emerald-400 transition-all duration-500" id="milestone-${name}-bar" style="width: 0%"></div>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        // Chart configuration
+        const chartConfig = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                x: { 
+                    display: true,
+                    grid: { color: '#374151' },
+                    ticks: { color: '#9CA3AF' }
+                },
+                y: { 
+                    display: true,
+                    grid: { color: '#374151' },
+                    ticks: { color: '#9CA3AF' }
+                }
+            }
+        };
+
+        // Initialize charts
+        let rewardChart, metricsChart, policyLossChart, valueLossChart;
+        const maxPoints = 200;
+
+        function initCharts() {
+            const rewardCtx = document.getElementById('reward-chart').getContext('2d');
+            rewardChart = new Chart(rewardCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Reward',
+                        data: [],
+                        borderColor: '#10B981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.4,
+                    }]
+                },
+                options: chartConfig
+            });
+
+            const metricsCtx = document.getElementById('metrics-chart').getContext('2d');
+            metricsChart = new Chart(metricsCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'Entropy',
+                            data: [],
+                            borderColor: '#6366F1',
+                            tension: 0.4,
+                        },
+                        {
+                            label: 'Expl. Var',
+                            data: [],
+                            borderColor: '#F59E0B',
+                            tension: 0.4,
+                        }
+                    ]
+                },
+                options: {...chartConfig, plugins: { legend: { display: true, labels: { color: '#9CA3AF' }}}}
+            });
+
+            const policyCtx = document.getElementById('policy-loss-chart').getContext('2d');
+            policyLossChart = new Chart(policyCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Policy Loss',
+                        data: [],
+                        borderColor: '#EF4444',
+                        tension: 0.4,
+                    }]
+                },
+                options: chartConfig
+            });
+
+            const valueCtx = document.getElementById('value-loss-chart').getContext('2d');
+            valueLossChart = new Chart(valueCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Value Loss',
+                        data: [],
+                        borderColor: '#8B5CF6',
+                        tension: 0.4,
+                    }]
+                },
+                options: chartConfig
+            });
+        }
+
+        // Update functions
+        function updateMetric(id, value, decimals = 2) {
+            const el = document.getElementById(id);
+            if (el && value !== undefined && value !== null) {
+                el.textContent = typeof value === 'number' ? value.toFixed(decimals) : value;
+            }
+        }
+
+        function updateMilestones(rates) {
+            MILESTONES.forEach(name => {
+                const rate = rates[name] || 0;
+                const pct = (rate * 100).toFixed(1);
+                const pctEl = document.getElementById(`milestone-${name}-pct`);
+                const barEl = document.getElementById(`milestone-${name}-bar`);
+                if (pctEl) pctEl.textContent = `${pct}%`;
+                if (barEl) barEl.style.width = `${pct}%`;
+            });
+        }
+
+        function addChartData(chart, label, value) {
+            chart.data.labels.push(label);
+            chart.data.datasets[0].data.push(value);
+            if (chart.data.labels.length > maxPoints) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+            chart.update('none');
+        }
+
+        function formatTime(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function formatNumber(n) {
+            if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+            if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+            if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+            return n.toString();
+        }
+
+        // SSE connection
+        function connectSSE() {
+            const statusIndicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status-text');
+            
+            const eventSource = new EventSource('/api/stream');
+            
+            eventSource.onopen = () => {
+                statusIndicator.className = 'w-3 h-3 rounded-full animate-pulse bg-green-500';
+                statusText.textContent = 'Connected';
+            };
+            
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleUpdate(data);
+                } catch (e) {
+                    console.error('Failed to parse SSE data:', e);
+                }
+            };
+            
+            eventSource.onerror = () => {
+                statusIndicator.className = 'w-3 h-3 rounded-full animate-pulse bg-red-500';
+                statusText.textContent = 'Disconnected';
+                setTimeout(connectSSE, 3000);
+            };
+        }
+
+        function handleUpdate(data) {
+            const step = data.step || 0;
+            const elapsed = data._elapsed || 0;
+            
+            // Update header
+            document.getElementById('elapsed-time').textContent = formatTime(elapsed);
+            document.getElementById('steps-count').textContent = formatNumber(step) + ' steps';
+            
+            // Update metrics
+            updateMetric('metric-reward', data.mean_reward || data.reward);
+            updateMetric('metric-sps', data.steps_per_sec, 0);
+            updateMetric('metric-entropy', data.entropy, 3);
+            updateMetric('metric-kl', data.approx_kl, 4);
+            updateMetric('metric-clip', data.clip_frac, 3);
+            updateMetric('metric-expvar', data.explained_var, 3);
+            
+            // Update charts
+            const label = formatNumber(step);
+            if (data.reward !== undefined || data.mean_reward !== undefined) {
+                addChartData(rewardChart, label, data.mean_reward || data.reward);
+            }
+            if (data.policy_loss !== undefined) {
+                addChartData(policyLossChart, label, data.policy_loss);
+            }
+            if (data.value_loss !== undefined) {
+                addChartData(valueLossChart, label, data.value_loss);
+            }
+            if (data.entropy !== undefined) {
+                metricsChart.data.labels.push(label);
+                metricsChart.data.datasets[0].data.push(data.entropy);
+                metricsChart.data.datasets[1].data.push(data.explained_var);
+                if (metricsChart.data.labels.length > maxPoints) {
+                    metricsChart.data.labels.shift();
+                    metricsChart.data.datasets.forEach(d => d.data.shift());
+                }
+                metricsChart.update('none');
+            }
+        }
+
+        // Fetch milestone rates periodically
+        async function fetchMilestones() {
+            try {
+                const response = await fetch('/api/milestones');
+                const data = await response.json();
+                updateMilestones(data.rates);
+            } catch (e) {
+                console.error('Failed to fetch milestones:', e);
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initMilestones();
+            initCharts();
+            connectSSE();
+            
+            // Fetch milestones every 5 seconds
+            setInterval(fetchMilestones, 5000);
+            fetchMilestones();
+        });
+    </script>
+</body>
+</html>
