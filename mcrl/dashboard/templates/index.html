@@ -6,6 +6,22 @@
     <title>MCRL Training Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* Prevent auto-scroll issues */
+        html, body {
+            overflow-x: hidden;
+            scroll-behavior: auto;
+        }
+        /* Fixed height for charts to prevent layout shift */
+        .chart-wrapper {
+            position: relative;
+            height: 200px;
+        }
+        .chart-wrapper-small {
+            position: relative;
+            height: 150px;
+        }
+    </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
     <!-- Header -->
@@ -70,23 +86,39 @@
         <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
                 <h3 class="text-lg font-semibold mb-4 text-gray-200">Reward Over Time</h3>
-                <canvas id="reward-chart" height="200"></canvas>
+                <div class="chart-wrapper">
+                    <canvas id="reward-chart"></canvas>
+                </div>
             </div>
             <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
                 <h3 class="text-lg font-semibold mb-4 text-gray-200">Training Metrics</h3>
-                <canvas id="metrics-chart" height="200"></canvas>
+                <div class="chart-wrapper">
+                    <canvas id="metrics-chart"></canvas>
+                </div>
             </div>
         </section>
 
         <!-- Losses -->
-        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
                 <h3 class="text-lg font-semibold mb-4 text-gray-200">Policy Loss</h3>
-                <canvas id="policy-loss-chart" height="150"></canvas>
+                <div class="chart-wrapper-small">
+                    <canvas id="policy-loss-chart"></canvas>
+                </div>
             </div>
             <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
                 <h3 class="text-lg font-semibold mb-4 text-gray-200">Value Loss</h3>
-                <canvas id="value-loss-chart" height="150"></canvas>
+                <div class="chart-wrapper-small">
+                    <canvas id="value-loss-chart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Log Output -->
+        <section class="mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-200">Training Log</h2>
+            <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 h-48 overflow-y-auto font-mono text-sm" id="log-container">
+                <div class="text-gray-500">Waiting for training data...</div>
             </div>
         </section>
     </main>
@@ -257,37 +289,117 @@
             return n.toString();
         }
 
-        // SSE connection
+        // Connection state
+        let isConnected = false;
+        let eventSource = null;
+        let pollInterval = null;
+
+        // SSE connection with fallback to polling
         function connectSSE() {
             const statusIndicator = document.getElementById('status-indicator');
             const statusText = document.getElementById('status-text');
             
-            const eventSource = new EventSource('/api/stream');
+            // Close existing connection
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
             
-            eventSource.onopen = () => {
-                statusIndicator.className = 'w-3 h-3 rounded-full animate-pulse bg-green-500';
-                statusText.textContent = 'Connected';
-            };
-            
-            eventSource.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    handleUpdate(data);
-                } catch (e) {
-                    console.error('Failed to parse SSE data:', e);
-                }
-            };
-            
-            eventSource.onerror = () => {
-                statusIndicator.className = 'w-3 h-3 rounded-full animate-pulse bg-red-500';
-                statusText.textContent = 'Disconnected';
-                setTimeout(connectSSE, 3000);
-            };
+            try {
+                eventSource = new EventSource('/api/stream');
+                
+                eventSource.onopen = () => {
+                    isConnected = true;
+                    statusIndicator.className = 'w-3 h-3 rounded-full bg-green-500';
+                    statusText.textContent = 'Connected (SSE)';
+                    addLog('Connected to training server via SSE');
+                    // Stop polling if SSE works
+                    if (pollInterval) {
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                };
+                
+                eventSource.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleUpdate(data);
+                    } catch (e) {
+                        console.error('Failed to parse SSE data:', e);
+                    }
+                };
+                
+                eventSource.onerror = () => {
+                    isConnected = false;
+                    statusIndicator.className = 'w-3 h-3 rounded-full bg-yellow-500';
+                    statusText.textContent = 'Reconnecting...';
+                    eventSource.close();
+                    eventSource = null;
+                    // Fall back to polling
+                    startPolling();
+                    // Try SSE again later
+                    setTimeout(connectSSE, 10000);
+                };
+            } catch (e) {
+                console.error('SSE not supported, using polling');
+                startPolling();
+            }
         }
 
+        // Polling fallback
+        function startPolling() {
+            if (pollInterval) return;
+            
+            const statusIndicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status-text');
+            
+            pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/metrics?n=1');
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.metrics && data.metrics.length > 0) {
+                            handleUpdate(data.metrics[data.metrics.length - 1]);
+                            if (!isConnected) {
+                                statusIndicator.className = 'w-3 h-3 rounded-full bg-blue-500';
+                                statusText.textContent = 'Connected (Polling)';
+                            }
+                        }
+                    }
+                } catch (e) {
+                    statusIndicator.className = 'w-3 h-3 rounded-full bg-red-500';
+                    statusText.textContent = 'No server';
+                }
+            }, 2000);
+        }
+
+        // Add log message
+        function addLog(message) {
+            const container = document.getElementById('log-container');
+            const time = new Date().toLocaleTimeString();
+            const div = document.createElement('div');
+            div.className = 'text-gray-300';
+            div.innerHTML = `<span class="text-gray-500">[${time}]</span> ${message}`;
+            container.appendChild(div);
+            // Keep only last 100 messages
+            while (container.children.length > 100) {
+                container.removeChild(container.firstChild);
+            }
+            // Scroll to bottom
+            container.scrollTop = container.scrollHeight;
+        }
+
+        let lastStep = 0;
+        
         function handleUpdate(data) {
+            if (!data) return;
+            
             const step = data.step || 0;
             const elapsed = data._elapsed || 0;
+            
+            // Skip if same step (avoid duplicate updates)
+            if (step === lastStep && step !== 0) return;
+            lastStep = step;
             
             // Update header
             document.getElementById('elapsed-time').textContent = formatTime(elapsed);
@@ -301,26 +413,35 @@
             updateMetric('metric-clip', data.clip_frac, 3);
             updateMetric('metric-expvar', data.explained_var, 3);
             
-            // Update charts
-            const label = formatNumber(step);
-            if (data.reward !== undefined || data.mean_reward !== undefined) {
-                addChartData(rewardChart, label, data.mean_reward || data.reward);
-            }
-            if (data.policy_loss !== undefined) {
-                addChartData(policyLossChart, label, data.policy_loss);
-            }
-            if (data.value_loss !== undefined) {
-                addChartData(valueLossChart, label, data.value_loss);
-            }
-            if (data.entropy !== undefined) {
-                metricsChart.data.labels.push(label);
-                metricsChart.data.datasets[0].data.push(data.entropy);
-                metricsChart.data.datasets[1].data.push(data.explained_var);
-                if (metricsChart.data.labels.length > maxPoints) {
-                    metricsChart.data.labels.shift();
-                    metricsChart.data.datasets.forEach(d => d.data.shift());
+            // Update charts (only if we have data)
+            if (step > 0) {
+                const label = formatNumber(step);
+                if (data.reward !== undefined || data.mean_reward !== undefined) {
+                    addChartData(rewardChart, label, data.mean_reward || data.reward);
                 }
-                metricsChart.update('none');
+                if (data.policy_loss !== undefined) {
+                    addChartData(policyLossChart, label, data.policy_loss);
+                }
+                if (data.value_loss !== undefined) {
+                    addChartData(valueLossChart, label, data.value_loss);
+                }
+                if (data.entropy !== undefined && data.explained_var !== undefined) {
+                    metricsChart.data.labels.push(label);
+                    metricsChart.data.datasets[0].data.push(data.entropy);
+                    metricsChart.data.datasets[1].data.push(data.explained_var || 0);
+                    if (metricsChart.data.labels.length > maxPoints) {
+                        metricsChart.data.labels.shift();
+                        metricsChart.data.datasets.forEach(d => d.data.shift());
+                    }
+                    metricsChart.update('none');
+                }
+            }
+            
+            // Log significant updates
+            if (step > 0 && step % 100000 === 0) {
+                const reward = (data.mean_reward || data.reward || 0).toFixed(2);
+                const sps = (data.steps_per_sec || 0).toFixed(0);
+                addLog(`Step ${formatNumber(step)}: reward=${reward}, sps=${sps}`);
             }
         }
 
@@ -339,6 +460,9 @@
         document.addEventListener('DOMContentLoaded', () => {
             initMilestones();
             initCharts();
+            
+            // Try SSE first, will fall back to polling
+            addLog('Dashboard initialized, connecting to server...');
             connectSSE();
             
             // Fetch milestones every 5 seconds

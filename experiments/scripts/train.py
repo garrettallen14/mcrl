@@ -84,6 +84,10 @@ def parse_args():
                         help="Run benchmarks before training")
     parser.add_argument("--profile", action="store_true",
                         help="Enable detailed profiling")
+    parser.add_argument("--dashboard", action="store_true",
+                        help="Enable dashboard metrics (requires dashboard server)")
+    parser.add_argument("--start-dashboard", action="store_true",
+                        help="Start dashboard server in background")
     
     return parser.parse_args()
 
@@ -239,47 +243,82 @@ def main():
     print(f"  Batch size: {config.batch_size:,}")
     print(f"  Total steps: {config.total_timesteps:,}")
     print(f"  Updates: {config.num_updates:,}")
+    print(f"  Fast network: {getattr(config, 'use_fast_network', False)}")
     
     # Setup logging
     run_dir, wandb_run = setup_logging(config)
     print(f"\nOutput dir: {run_dir}")
+    
+    # Start dashboard server if requested
+    dashboard_process = None
+    if args.start_dashboard:
+        import subprocess
+        print("\nStarting dashboard server on port 3000...")
+        dashboard_process = subprocess.Popen(
+            [sys.executable, "-m", "mcrl.dashboard.server", "--port", "3000"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(1)  # Give it time to start
+        print("Dashboard available at http://localhost:3000")
     
     # Run benchmarks if requested
     if args.benchmark:
         run_benchmarks(config)
     
     # Train
-    print("\nStarting training...")
+    print("\n" + "="*60)
+    print("Starting training...")
+    print("="*60)
     start_time = time.time()
     
+    # Determine if dashboard metrics should be enabled
+    use_dashboard = args.dashboard or args.start_dashboard
+    metrics_history = []  # Initialize here in case of early interrupt
+    
     try:
-        final_state, metrics_history = train(config, verbose=True)
+        final_state, metrics_history = train(config, verbose=True, dashboard=use_dashboard)
         
         # Save final checkpoint
         checkpoint_path = run_dir / "checkpoints" / "final"
         checkpoint_path.mkdir(parents=True, exist_ok=True)
         
         # Save metrics history
-        with open(run_dir / "metrics.jsonl", "w") as f:
+        metrics_file = run_dir / "metrics.jsonl"
+        with open(metrics_file, "w") as f:
             for m in metrics_history:
                 f.write(json.dumps(m) + "\n")
         
         total_time = time.time() - start_time
-        print(f"\nTraining complete!")
-        print(f"  Total time: {total_time / 3600:.2f} hours")
+        print("\n" + "="*60)
+        print("Training Complete!")
+        print("="*60)
+        print(f"  Total time: {total_time / 3600:.2f} hours ({total_time:.0f}s)")
         print(f"  Average SPS: {config.total_timesteps / total_time:,.0f}")
-        print(f"  Checkpoints saved to: {checkpoint_path}")
+        print(f"  Metrics saved to: {metrics_file}")
+        print(f"  Checkpoints: {checkpoint_path}")
         
     except KeyboardInterrupt:
-        print("\nTraining interrupted by user")
+        print("\n\nTraining interrupted by user")
+        # Still save metrics
+        if metrics_history:
+            with open(run_dir / "metrics.jsonl", "w") as f:
+                for m in metrics_history:
+                    f.write(json.dumps(m) + "\n")
+            print(f"Partial metrics saved to {run_dir / 'metrics.jsonl'}")
         
     except Exception as e:
         print(f"\nTraining failed with error: {e}")
+        import traceback
+        traceback.print_exc()
         raise
         
     finally:
         if wandb_run:
             wandb_run.finish()
+        if dashboard_process:
+            dashboard_process.terminate()
+            print("Dashboard server stopped")
 
 
 if __name__ == "__main__":

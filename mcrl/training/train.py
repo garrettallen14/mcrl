@@ -416,18 +416,29 @@ def update_ppo(
     return train_state, metrics
 
 
-def train(config: TrainConfig, verbose: bool = True):
+def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
     """
     Main training function.
     
     Args:
         config: Training configuration
         verbose: Whether to print progress
+        dashboard: Whether to send metrics to dashboard server
     
     Returns:
         final_state: Final training state
         metrics_history: List of metrics dicts
     """
+    # Setup dashboard metrics collector if enabled
+    metrics_collector = None
+    if dashboard:
+        try:
+            from mcrl.dashboard.metrics import get_collector
+            metrics_collector = get_collector()
+            print("Dashboard metrics collector enabled")
+        except ImportError:
+            print("Dashboard not available, continuing without it")
+    
     # Initialize
     key = jax.random.PRNGKey(config.seed)
     key, init_key, env_key = jax.random.split(key, 3)
@@ -443,8 +454,10 @@ def train(config: TrainConfig, verbose: bool = True):
     train_state, network = create_train_state(config, init_key)
     
     # Initialize environments
+    print(f"Initializing {config.num_envs} environments...")
     env_keys = jax.random.split(env_key, config.num_envs)
     env_states, initial_obs = jax.vmap(env._reset)(env_keys)
+    print("Environments initialized")
     
     # Create runner state
     runner_state = RunnerState(
@@ -458,6 +471,7 @@ def train(config: TrainConfig, verbose: bool = True):
     # Training metrics
     metrics_history = []
     start_time = time.time()
+    last_log_time = start_time
     
     if verbose:
         print(f"Starting training: {config.total_timesteps:,} steps")
@@ -497,12 +511,14 @@ def train(config: TrainConfig, verbose: bool = True):
         
         # Log metrics
         if update % config.logging.log_interval == 0:
-            update_time = time.time() - update_start
+            current_time = time.time()
+            update_time = current_time - update_start
+            elapsed = current_time - start_time
             steps_per_sec = config.batch_size / update_time
             total_steps = runner_state.global_step
             
             metrics = {
-                'step': total_steps,
+                'step': int(total_steps),
                 'update': update,
                 'mean_reward': float(episode_rewards),
                 'entropy': float(ppo_metrics.entropy_loss),
@@ -511,19 +527,33 @@ def train(config: TrainConfig, verbose: bool = True):
                 'approx_kl': float(ppo_metrics.approx_kl),
                 'clip_frac': float(ppo_metrics.clip_frac),
                 'explained_var': float(ppo_metrics.explained_var),
-                'ent_coef': ent_coef,
-                'steps_per_sec': steps_per_sec,
+                'ent_coef': float(ent_coef),
+                'steps_per_sec': float(steps_per_sec),
+                'elapsed': elapsed,
+                '_elapsed': elapsed,  # For dashboard compatibility
             }
             
             metrics_history.append(metrics)
             
+            # Send to dashboard if enabled
+            if metrics_collector is not None:
+                metrics_collector.record(metrics)
+            
             if verbose:
-                elapsed = time.time() - start_time
-                print(f"Update {update:5d} | Step {total_steps:10,} | "
-                      f"Reward {episode_rewards:6.2f} | "
+                # Calculate ETA
+                progress = total_steps / config.total_timesteps
+                if progress > 0:
+                    eta_sec = elapsed / progress - elapsed
+                    eta_str = f"{eta_sec/60:.0f}m" if eta_sec < 3600 else f"{eta_sec/3600:.1f}h"
+                else:
+                    eta_str = "..."
+                
+                print(f"[{elapsed:6.0f}s] Update {update:5d} | Step {total_steps:10,} ({100*progress:5.1f}%) | "
+                      f"Reward {episode_rewards:7.2f} | "
                       f"Entropy {ppo_metrics.entropy_loss:.3f} | "
                       f"KL {ppo_metrics.approx_kl:.4f} | "
-                      f"SPS {steps_per_sec:,.0f}")
+                      f"SPS {steps_per_sec:>8,.0f} | "
+                      f"ETA {eta_str}")
     
     total_time = time.time() - start_time
     if verbose:
