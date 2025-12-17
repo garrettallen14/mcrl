@@ -671,24 +671,28 @@ def calculate_simple_wood_reward(
     flags = jnp.where(first_planks, flags | (1 << 1), flags)
     
     # ─────────────────────────────────────────────────────────────────────────
-    # TASK: Crafting more planks
+    # TASK: Crafting more planks (FIXED: safe inventory access + caps)
     # ─────────────────────────────────────────────────────────────────────────
-    prev_planks = jnp.where(
-        has_item(prev_state.player.inventory, ItemType.OAK_PLANKS, 1),
-        prev_state.player.inventory[
-            jnp.argmax(prev_state.player.inventory[:, 0] == ItemType.OAK_PLANKS), 1
-        ],
-        0
-    )
-    curr_planks = jnp.where(
-        has_planks,
-        state.player.inventory[
-            jnp.argmax(state.player.inventory[:, 0] == ItemType.OAK_PLANKS), 1
-        ],
-        0
-    )
-    planks_gained = jnp.maximum(curr_planks - prev_planks, 0)
-    craft_reward = planks_gained * 2.0  # +2.0 per plank crafted (8x stronger)
+    # Safe plank counting - find slot with planks, default to 0 if none
+    prev_plank_mask = prev_state.player.inventory[:, 0] == ItemType.OAK_PLANKS
+    prev_has_planks = prev_plank_mask.any()
+    # Use sum of all plank slots (safer than argmax which can return wrong slot)
+    prev_planks = jnp.where(prev_has_planks, 
+                            jnp.sum(jnp.where(prev_plank_mask, prev_state.player.inventory[:, 1], 0)),
+                            0)
+    
+    curr_plank_mask = state.player.inventory[:, 0] == ItemType.OAK_PLANKS
+    curr_has_planks = curr_plank_mask.any()
+    curr_planks = jnp.where(curr_has_planks,
+                            jnp.sum(jnp.where(curr_plank_mask, state.player.inventory[:, 1], 0)),
+                            0)
+    
+    # Cap planks_gained to prevent reward explosion (max 16 planks = 4 logs crafted at once)
+    planks_gained = jnp.clip(curr_planks - prev_planks, 0, 16)
+    craft_reward = planks_gained * 2.0  # +2.0 per plank crafted
     total_reward = total_reward + craft_reward
+    
+    # Cap total reward per step to prevent runaway optimization
+    total_reward = jnp.clip(total_reward, -10.0, 50.0)
     
     return total_reward, flags
