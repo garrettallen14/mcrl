@@ -265,12 +265,17 @@ class FastActorCritic(nn.Module):
         state_features = FastStateEncoder()(obs['player_state'])
         facing_features = FastFacingEncoder()(obs['facing_blocks'])
         
-        # Concatenate: 256 + 64 + 32 + 32 = 384
+        # Log compass - direction to nearest log (crucial for navigation!)
+        # Shape: [batch, 4] -> [dx, dy, dz, distance]
+        log_compass = obs.get('log_compass', jnp.zeros((*obs['inventory'].shape[:-1], 4)))
+        
+        # Concatenate: 256 + 64 + 32 + 32 + 4 = 388
         combined = jnp.concatenate([
             voxel_features,
             inventory_features,
             state_features,
             facing_features,
+            log_compass,  # Add compass directly - already normalized
         ], axis=-1)
         
         # Shared trunk
@@ -387,12 +392,16 @@ class UltraFastActorCritic(nn.Module):
         state_features = FastStateEncoder()(obs['player_state'])
         facing_features = FastFacingEncoder()(obs['facing_blocks'])
         
-        # Concatenate: 256 + 64 + 32 + 32 = 384
+        # Log compass - direction to nearest log (crucial for navigation!)
+        log_compass = obs.get('log_compass', jnp.zeros((*obs['inventory'].shape[:-1], 4)))
+        
+        # Concatenate: 256 + 64 + 32 + 32 + 4 = 388
         combined = jnp.concatenate([
             voxel_features,
             inventory_features,
             state_features,
             facing_features,
+            log_compass,
         ], axis=-1)
         
         # Shared trunk

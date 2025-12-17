@@ -234,6 +234,15 @@ _HEALTH_NORM = jnp.float32(1.0 / 20.0)
 # Pre-computed ray sample distances
 _RAY_DISTANCES = jnp.linspace(0.5, 4.0, 8, dtype=jnp.float32)
 
+# Pre-computed log search offsets (radius 20, height -2 to 15)
+_LOG_SEARCH_RADIUS = 20
+_LOG_SEARCH_OFFSETS = jnp.stack(jnp.meshgrid(
+    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
+    jnp.arange(-2, 15),
+    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
+    indexing='ij'
+), axis=-1).reshape(-1, 3)
+
 
 def get_observation_fused(state) -> dict:
     """
@@ -312,11 +321,63 @@ def get_observation_fused(state) -> dict:
         player.mining_progress.astype(jnp.float32),
     ], dtype=jnp.float32)
     
+    # === Log compass - direction to nearest log ===
+    # Check positions around player for logs
+    check_positions = pos_int[None, :] + _LOG_SEARCH_OFFSETS
+    
+    # Bounds check
+    in_bounds_log = (
+        (check_positions[:, 0] >= 0) & (check_positions[:, 0] < W) &
+        (check_positions[:, 1] >= 0) & (check_positions[:, 1] < H) &
+        (check_positions[:, 2] >= 0) & (check_positions[:, 2] < D)
+    )
+    
+    # Safe indexing
+    safe_log_pos = jnp.clip(check_positions, 0, jnp.array([W-1, H-1, D-1]))
+    log_blocks = world.blocks[safe_log_pos[:, 0], safe_log_pos[:, 1], safe_log_pos[:, 2]]
+    log_blocks = jnp.where(in_bounds_log, log_blocks, 0)
+    
+    # Check if log
+    is_log = (
+        (log_blocks == BlockType.OAK_LOG) |
+        (log_blocks == BlockType.BIRCH_LOG) |
+        (log_blocks == BlockType.SPRUCE_LOG)
+    )
+    
+    # Compute distances
+    offsets_float = _LOG_SEARCH_OFFSETS.astype(jnp.float32)
+    log_distances = jnp.sqrt(jnp.sum(offsets_float ** 2, axis=1))
+    log_distances = jnp.where(is_log, log_distances, 1000.0)
+    
+    # Find nearest
+    nearest_idx = jnp.argmin(log_distances)
+    nearest_dist = log_distances[nearest_idx]
+    
+    # Direction to nearest log (normalized)
+    dir_vec = offsets_float[nearest_idx]
+    dir_len = jnp.maximum(nearest_dist, 0.01)
+    dir_normalized = dir_vec / dir_len
+    
+    # Zero direction if no log found
+    found_log = nearest_dist < 999.0
+    dir_normalized = jnp.where(found_log, dir_normalized, 0.0)
+    
+    # Normalized distance (0 = at log, 1 = far)
+    norm_dist = jnp.clip(nearest_dist / 30.0, 0.0, 1.0)
+    
+    log_compass = jnp.array([
+        dir_normalized[0],
+        dir_normalized[1], 
+        dir_normalized[2],
+        norm_dist
+    ], dtype=jnp.float32)
+    
     return {
         "local_voxels": local_voxels,
         "facing_blocks": facing,
         "inventory": inventory,
         "player_state": player_state,
+        "log_compass": log_compass,
         "tick": world.tick,
     }
 

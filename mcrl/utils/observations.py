@@ -150,6 +150,93 @@ def encode_inventory(inventory: jnp.ndarray) -> jnp.ndarray:
     return counts
 
 
+def get_log_compass(state: GameState, search_radius: int = 20) -> jnp.ndarray:
+    """
+    Get direction vector pointing toward nearest log.
+    
+    Returns: [4] array:
+        - dx, dy, dz: normalized direction to nearest log (or 0 if none)
+        - distance: normalized distance (0-1, where 1 = far away)
+    
+    This helps the agent navigate toward trees even when they're outside
+    the local voxel observation range.
+    """
+    world = state.world
+    player_pos = state.player.pos
+    W, H, D = world.blocks.shape
+    
+    # Search for logs in a radius around player
+    pos_int = jnp.floor(player_pos).astype(jnp.int32)
+    
+    # Create search grid (pre-allocated in practice, inline here for clarity)
+    offsets = jnp.arange(-search_radius, search_radius + 1)
+    ox, oy, oz = jnp.meshgrid(offsets, jnp.arange(-2, 15), offsets, indexing='ij')
+    ox, oy, oz = ox.flatten(), oy.flatten(), oz.flatten()
+    
+    # Sample positions
+    check_x = pos_int[0] + ox
+    check_y = pos_int[1] + oy
+    check_z = pos_int[2] + oz
+    
+    # Bounds check
+    valid = (
+        (check_x >= 0) & (check_x < W) &
+        (check_y >= 0) & (check_y < H) &
+        (check_z >= 0) & (check_z < D)
+    )
+    
+    # Safe indexing
+    safe_x = jnp.clip(check_x, 0, W - 1)
+    safe_y = jnp.clip(check_y, 0, H - 1)
+    safe_z = jnp.clip(check_z, 0, D - 1)
+    
+    # Get block types
+    blocks = world.blocks[safe_x, safe_y, safe_z]
+    blocks = jnp.where(valid, blocks, 0)
+    
+    # Check if log
+    is_log = (
+        (blocks == BlockType.OAK_LOG) |
+        (blocks == BlockType.BIRCH_LOG) |
+        (blocks == BlockType.SPRUCE_LOG)
+    )
+    
+    # Compute distances
+    dx = ox.astype(jnp.float32)
+    dy = oy.astype(jnp.float32)
+    dz = oz.astype(jnp.float32)
+    distances = jnp.sqrt(dx**2 + dy**2 + dz**2)
+    
+    # Mask non-logs with large distance
+    distances = jnp.where(is_log, distances, 1000.0)
+    
+    # Find nearest
+    nearest_idx = jnp.argmin(distances)
+    nearest_dist = distances[nearest_idx]
+    
+    # Direction to nearest log
+    dir_x = dx[nearest_idx]
+    dir_y = dy[nearest_idx]
+    dir_z = dz[nearest_idx]
+    
+    # Normalize direction
+    dir_len = jnp.maximum(nearest_dist, 0.01)
+    dir_x = dir_x / dir_len
+    dir_y = dir_y / dir_len
+    dir_z = dir_z / dir_len
+    
+    # If no log found, zero direction
+    found_log = nearest_dist < 999.0
+    dir_x = jnp.where(found_log, dir_x, 0.0)
+    dir_y = jnp.where(found_log, dir_y, 0.0)
+    dir_z = jnp.where(found_log, dir_z, 0.0)
+    
+    # Normalized distance (0 = at log, 1 = far away)
+    norm_dist = jnp.clip(nearest_dist / 30.0, 0.0, 1.0)
+    
+    return jnp.array([dir_x, dir_y, dir_z, norm_dist])
+
+
 def get_player_state_vector(state: GameState) -> jnp.ndarray:
     """
     Get player state as a feature vector.
@@ -183,6 +270,7 @@ def get_full_observation(state: GameState) -> dict:
         - facing_blocks: [8] blocks along view ray
         - inventory: [16] item counts for key items
         - player_state: [14] player features
+        - log_compass: [4] direction & distance to nearest log
         - tick: current game tick
     """
     return {
@@ -190,6 +278,7 @@ def get_full_observation(state: GameState) -> dict:
         "facing_blocks": get_facing_blocks(state),
         "inventory": encode_inventory(state.player.inventory),
         "player_state": get_player_state_vector(state),
+        "log_compass": get_log_compass(state),
         "tick": state.world.tick,
     }
 
