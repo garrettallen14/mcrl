@@ -577,12 +577,19 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
     print("JIT compiling training step (this takes a few minutes)...")
     
     # Training loop
+    # Track param changes between updates
+    prev_param_sum = None
+    
     for update in range(config.num_updates):
         update_start = time.time()
         
         # Compute current entropy coefficient (annealing) - use jnp to avoid retracing
         progress = runner_state.global_step / config.total_timesteps
         ent_coef = jnp.float32(config.ppo.ent_coef + (config.ppo.ent_coef_final - config.ppo.ent_coef) * progress)
+        
+        # Track params BEFORE update
+        params_before = runner_state.train_state.params
+        param_sum_before = sum(float(p.sum()) for p in jax.tree_util.tree_leaves(params_before))
         
         # Collect rollout (JIT compiled)
         runner_state, trajectory = _collect_rollout_jit(runner_state)
@@ -599,6 +606,10 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
             ent_coef,
         )
         runner_state = runner_state.replace(train_state=train_state)
+        
+        # Track params AFTER update
+        param_sum_after = sum(float(p.sum()) for p in jax.tree_util.tree_leaves(train_state.params))
+        param_delta = param_sum_after - param_sum_before
         
         # Block until computation is done (for accurate timing)
         jax.block_until_ready(train_state.params)
@@ -682,7 +693,7 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
                       f"KL {kl_str} | "
                       f"{ratio_info} | "
                       f"GradN {grad_norm:.2f} | "
-                      f"SPS {steps_per_sec:>8,.0f}")
+                      f"ParamΔ {param_delta:+.4f}")
     
     total_time = time.time() - start_time
     if verbose:
