@@ -711,10 +711,11 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
                     'update': update,
                     'reward': float(episode_rewards),
                     'entropy': float(ppo_metrics.entropy_loss),
-                }
+                },
+                max_checkpoints=config.logging.max_checkpoints,
             )
     
-    # Save final checkpoint
+    # Save final checkpoint (always keep, don't count against max)
     total_time = time.time() - start_time
     ckpt_path = os.path.join(config.output_dir, "checkpoints")
     save_checkpoint(
@@ -725,7 +726,8 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
             'final': True,
             'total_time': total_time,
             'total_steps': int(runner_state.global_step),
-        }
+        },
+        max_checkpoints=0,  # Don't cleanup for final checkpoint
     )
     
     if verbose:

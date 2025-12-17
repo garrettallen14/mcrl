@@ -19,6 +19,7 @@ def save_checkpoint(
     path: str,
     step: int = 0,
     metadata: Optional[Dict] = None,
+    max_checkpoints: int = 5,
 ) -> str:
     """
     Save model parameters to a checkpoint file.
@@ -28,6 +29,7 @@ def save_checkpoint(
         path: Directory to save checkpoint
         step: Training step number
         metadata: Optional metadata dict
+        max_checkpoints: Max number of checkpoints to keep (0 = unlimited)
     
     Returns:
         Path to saved checkpoint
@@ -53,8 +55,35 @@ def save_checkpoint(
     with open(meta_file, 'w') as f:
         json.dump(meta, f, indent=2)
     
-    print(f"Saved checkpoint to {params_file}")
+    # Cleanup old checkpoints to prevent disk overflow
+    if max_checkpoints > 0:
+        _cleanup_old_checkpoints(path, max_checkpoints)
+    
+    size_mb = params_file.stat().st_size / (1024 * 1024)
+    print(f"Saved checkpoint to {params_file} ({size_mb:.1f} MB)")
     return str(params_file)
+
+
+def _cleanup_old_checkpoints(path: Path, max_checkpoints: int):
+    """Remove old checkpoints, keeping only the most recent ones."""
+    param_files = sorted(path.glob("params_*.pkl"))
+    
+    if len(param_files) <= max_checkpoints:
+        return
+    
+    # Remove oldest checkpoints
+    files_to_remove = param_files[:-max_checkpoints]
+    for pf in files_to_remove:
+        # Get step number from filename
+        step = pf.stem.split('_')[1]
+        meta_file = path / f"metadata_{step}.json"
+        
+        # Remove both files
+        pf.unlink(missing_ok=True)
+        if meta_file.exists():
+            meta_file.unlink(missing_ok=True)
+        
+        print(f"  Removed old checkpoint: {pf.name}")
 
 
 def load_checkpoint(
