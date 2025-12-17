@@ -412,6 +412,98 @@ def get_shaped_reward(
 # SIMPLE REWARD: Wood → Planks (for initial testing/debugging)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Pre-computed search offsets for finding nearby logs (smaller radius for speed)
+_LOG_SEARCH_RADIUS = 8
+_LOG_SEARCH_OFFSETS = jnp.stack(jnp.meshgrid(
+    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
+    jnp.arange(-2, 10),  # Check ground to tree height
+    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
+    indexing='ij'
+), axis=-1).reshape(-1, 3)
+
+
+def _find_nearest_log_distance(world_blocks: jnp.ndarray, player_pos: jnp.ndarray) -> jnp.ndarray:
+    """Find distance to nearest log block (vectorized)."""
+    W, H, D = world_blocks.shape
+    pos_int = player_pos.astype(jnp.int32)
+    
+    # Check positions around player
+    check_positions = pos_int[None, :] + _LOG_SEARCH_OFFSETS
+    
+    # Bounds check
+    in_bounds = (
+        (check_positions[:, 0] >= 0) & (check_positions[:, 0] < W) &
+        (check_positions[:, 1] >= 0) & (check_positions[:, 1] < H) &
+        (check_positions[:, 2] >= 0) & (check_positions[:, 2] < D)
+    )
+    
+    # Safe positions for gather
+    safe_pos = jnp.clip(check_positions, 0, jnp.array([W-1, H-1, D-1]))
+    
+    # Get block types
+    blocks = world_blocks[safe_pos[:, 0], safe_pos[:, 1], safe_pos[:, 2]]
+    blocks = jnp.where(in_bounds, blocks, 0)
+    
+    # Check if log
+    is_log = (
+        (blocks == BlockType.OAK_LOG) |
+        (blocks == BlockType.BIRCH_LOG) |
+        (blocks == BlockType.SPRUCE_LOG)
+    )
+    
+    # Compute distances (only for valid log positions)
+    offsets_float = _LOG_SEARCH_OFFSETS.astype(jnp.float32)
+    distances = jnp.sqrt(jnp.sum(offsets_float ** 2, axis=1))
+    
+    # Set non-log distances to large value
+    distances = jnp.where(is_log, distances, 1000.0)
+    
+    return jnp.min(distances)
+
+
+def _is_facing_log(world_blocks: jnp.ndarray, player_pos: jnp.ndarray, player_rot: jnp.ndarray) -> jnp.ndarray:
+    """Check if player is looking at a log block within reach."""
+    W, H, D = world_blocks.shape
+    
+    # Eye position
+    eye = player_pos + jnp.array([0.0, 1.62, 0.0])
+    
+    # Look direction
+    pitch_rad = player_rot[0] * (jnp.pi / 180.0)
+    yaw_rad = player_rot[1] * (jnp.pi / 180.0)
+    cos_pitch = jnp.cos(pitch_rad)
+    direction = jnp.array([
+        cos_pitch * jnp.sin(yaw_rad),
+        -jnp.sin(pitch_rad),
+        cos_pitch * jnp.cos(yaw_rad),
+    ])
+    
+    # Check blocks along ray (reach distance ~4 blocks)
+    distances = jnp.array([1.0, 2.0, 3.0, 4.0])
+    positions = eye[None, :] + direction[None, :] * distances[:, None]
+    block_pos = jnp.floor(positions).astype(jnp.int32)
+    
+    # Bounds check
+    in_bounds = (
+        (block_pos[:, 0] >= 0) & (block_pos[:, 0] < W) &
+        (block_pos[:, 1] >= 0) & (block_pos[:, 1] < H) &
+        (block_pos[:, 2] >= 0) & (block_pos[:, 2] < D)
+    )
+    
+    safe_pos = jnp.clip(block_pos, 0, jnp.array([W-1, H-1, D-1]))
+    blocks = world_blocks[safe_pos[:, 0], safe_pos[:, 1], safe_pos[:, 2]]
+    blocks = jnp.where(in_bounds, blocks, 0)
+    
+    # Check if any is log
+    is_log = (
+        (blocks == BlockType.OAK_LOG) |
+        (blocks == BlockType.BIRCH_LOG) |
+        (blocks == BlockType.SPRUCE_LOG)
+    )
+    
+    return is_log.any()
+
+
 def calculate_simple_wood_reward(
     state: GameState,
     prev_state: GameState,
@@ -420,11 +512,17 @@ def calculate_simple_wood_reward(
     """
     Simple reward function for testing: Mine wood and craft planks.
     
-    Rewards:
+    Shaping Rewards (small, frequent):
+        - Getting closer to wood: +0.01 per block closer
+        - Looking at wood: +0.02
+        - Mining progress on wood: +0.05 per tick
+        - Adjacent to wood: +0.03
+    
+    Task Rewards (larger, milestone):
         - Breaking any log block: +0.5
         - First time getting log in inventory: +1.0
         - First time getting planks: +2.0
-        - Crafting planks (inventory increase): +1.0
+        - Crafting planks (inventory increase): +0.25 per plank
     
     Uses reward_flags bits:
         - bit 0: got first log
@@ -437,7 +535,85 @@ def calculate_simple_wood_reward(
     flags = state.reward_flags
     total_reward = jnp.float32(0.0)
     
-    # Reward for breaking a log (any type)
+    # Skip shaping rewards if already got log (focus on crafting)
+    already_got_log = (flags >> 0) & 1
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # SHAPING: Distance to nearest log (potential-based)
+    # ─────────────────────────────────────────────────────────────────────────
+    curr_dist = _find_nearest_log_distance(state.world.blocks, state.player.pos)
+    prev_dist = _find_nearest_log_distance(prev_state.world.blocks, prev_state.player.pos)
+    
+    # Reward for getting closer (only if we haven't got log yet)
+    dist_improvement = prev_dist - curr_dist  # positive = got closer
+    approach_reward = jnp.where(
+        ~already_got_log.astype(jnp.bool_),
+        jnp.clip(dist_improvement * 0.02, -0.05, 0.1),  # +0.02 per block closer, capped
+        0.0
+    )
+    total_reward = total_reward + approach_reward
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # SHAPING: Looking at wood
+    # ─────────────────────────────────────────────────────────────────────────
+    facing_log = _is_facing_log(state.world.blocks, state.player.pos, state.player.rot)
+    look_reward = jnp.where(
+        facing_log & ~already_got_log.astype(jnp.bool_),
+        0.02,
+        0.0
+    )
+    total_reward = total_reward + look_reward
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # SHAPING: Mining progress on wood
+    # ─────────────────────────────────────────────────────────────────────────
+    # Check if currently mining and target is log
+    mining_block = state.player.mining_block
+    W, H, D = state.world.blocks.shape
+    mining_in_bounds = (
+        (mining_block[0] >= 0) & (mining_block[0] < W) &
+        (mining_block[1] >= 0) & (mining_block[1] < H) &
+        (mining_block[2] >= 0) & (mining_block[2] < D)
+    )
+    
+    mining_block_type = jnp.where(
+        mining_in_bounds,
+        state.world.blocks[
+            jnp.clip(mining_block[0], 0, W-1),
+            jnp.clip(mining_block[1], 0, H-1),
+            jnp.clip(mining_block[2], 0, D-1)
+        ],
+        0
+    )
+    
+    mining_log = (
+        (mining_block_type == BlockType.OAK_LOG) |
+        (mining_block_type == BlockType.BIRCH_LOG) |
+        (mining_block_type == BlockType.SPRUCE_LOG)
+    )
+    
+    # Reward for making mining progress on log
+    progress_increased = state.player.mining_progress > prev_state.player.mining_progress
+    mining_reward = jnp.where(
+        mining_log & progress_increased & ~already_got_log.astype(jnp.bool_),
+        0.05,
+        0.0
+    )
+    total_reward = total_reward + mining_reward
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # SHAPING: Adjacent to wood (within 2 blocks)
+    # ─────────────────────────────────────────────────────────────────────────
+    adjacent_reward = jnp.where(
+        (curr_dist <= 2.0) & ~already_got_log.astype(jnp.bool_),
+        0.01,
+        0.0
+    )
+    total_reward = total_reward + adjacent_reward
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # TASK: Breaking a log
+    # ─────────────────────────────────────────────────────────────────────────
     is_log = (
         (block_just_broken == BlockType.OAK_LOG) |
         (block_just_broken == BlockType.BIRCH_LOG) |
@@ -446,25 +622,30 @@ def calculate_simple_wood_reward(
     log_break_reward = jnp.where(is_log, 0.5, 0.0)
     total_reward = total_reward + log_break_reward
     
-    # Reward for first log pickup
+    # ─────────────────────────────────────────────────────────────────────────
+    # TASK: First log pickup
+    # ─────────────────────────────────────────────────────────────────────────
     has_log = (
         has_item(state.player.inventory, ItemType.OAK_LOG, 1) |
         has_item(state.player.inventory, ItemType.BIRCH_LOG, 1) |
         has_item(state.player.inventory, ItemType.SPRUCE_LOG, 1)
     )
-    already_got_log = (flags >> 0) & 1
     first_log = has_log & ~already_got_log
     total_reward = total_reward + jnp.where(first_log, 1.0, 0.0)
     flags = jnp.where(first_log, flags | (1 << 0), flags)
     
-    # Reward for first planks
+    # ─────────────────────────────────────────────────────────────────────────
+    # TASK: First planks
+    # ─────────────────────────────────────────────────────────────────────────
     has_planks = has_item(state.player.inventory, ItemType.OAK_PLANKS, 1)
     already_got_planks = (flags >> 1) & 1
     first_planks = has_planks & ~already_got_planks
     total_reward = total_reward + jnp.where(first_planks, 2.0, 0.0)
     flags = jnp.where(first_planks, flags | (1 << 1), flags)
     
-    # Reward for crafting more planks (inventory increase)
+    # ─────────────────────────────────────────────────────────────────────────
+    # TASK: Crafting more planks
+    # ─────────────────────────────────────────────────────────────────────────
     prev_planks = jnp.where(
         has_item(prev_state.player.inventory, ItemType.OAK_PLANKS, 1),
         prev_state.player.inventory[
