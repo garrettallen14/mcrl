@@ -234,14 +234,17 @@ _HEALTH_NORM = jnp.float32(1.0 / 20.0)
 # Pre-computed ray sample distances
 _RAY_DISTANCES = jnp.linspace(0.5, 4.0, 8, dtype=jnp.float32)
 
-# Pre-computed log search offsets (radius 20, height -2 to 15)
-_LOG_SEARCH_RADIUS = 20
+# Pre-computed log search offsets - OPTIMIZED
+# Reduced radius (12 instead of 20) and sparse sampling (every 2 blocks)
+_LOG_SEARCH_RADIUS = 12
+_LOG_SEARCH_STEP = 2  # Sample every 2nd block for speed
 _LOG_SEARCH_OFFSETS = jnp.stack(jnp.meshgrid(
-    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
-    jnp.arange(-2, 15),
-    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
+    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1, _LOG_SEARCH_STEP),
+    jnp.arange(0, 10, 2),  # Trees are typically Y=ground to ground+10
+    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1, _LOG_SEARCH_STEP),
     indexing='ij'
 ), axis=-1).reshape(-1, 3)
+# This gives us (13*5*13) = 845 samples instead of (41*17*41) = 28,577 = 33x faster!
 
 
 def get_observation_fused(state) -> dict:

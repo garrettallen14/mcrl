@@ -412,15 +412,17 @@ def get_shaped_reward(
 # SIMPLE REWARD: Wood → Planks (for initial testing/debugging)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Pre-computed search offsets for finding nearby logs
-# IMPORTANT: Must be large enough to cover spawn distance to nearest tree!
-_LOG_SEARCH_RADIUS = 20  # Increased from 8 to cover typical spawn distances
+# Pre-computed search offsets for finding nearby logs - OPTIMIZED
+# Sparse sampling for speed: check every 2nd block
+_LOG_SEARCH_RADIUS = 12
+_LOG_SEARCH_STEP = 2
 _LOG_SEARCH_OFFSETS = jnp.stack(jnp.meshgrid(
-    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
-    jnp.arange(-2, 15),  # Check ground to tree canopy height
-    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
+    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1, _LOG_SEARCH_STEP),
+    jnp.arange(0, 10, 2),  # Trees Y range
+    jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1, _LOG_SEARCH_STEP),
     indexing='ij'
 ), axis=-1).reshape(-1, 3)
+# 845 samples instead of 28,577 = 33x faster!
 
 
 def _find_nearest_log_distance(world_blocks: jnp.ndarray, player_pos: jnp.ndarray) -> jnp.ndarray:
