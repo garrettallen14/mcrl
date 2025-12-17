@@ -479,37 +479,95 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
         print(f"  Envs: {config.num_envs}, Steps/rollout: {config.num_steps}")
         print(f"  Batch size: {config.batch_size:,}, Updates: {config.num_updates:,}")
     
+    # JIT compile the training step (critical for performance!)
+    @jax.jit
+    def _collect_rollout_jit(runner_state):
+        """JIT-compiled rollout collection."""
+        def step_fn(carry, _):
+            train_state, env_state, last_obs, rng = carry
+            rng, action_key = jax.random.split(rng)
+            
+            action, log_prob, entropy, value = network.apply(
+                train_state.params,
+                last_obs,
+                action_key,
+                method=network.get_action_and_value,
+            )
+            
+            env_state, obs, reward, done, info = jax.vmap(
+                lambda s, a: env._step(s, a)
+            )(env_state, action)
+            
+            transition = (last_obs, action, log_prob, value, reward, done)
+            return (train_state, env_state, obs, rng), transition
+        
+        initial_carry = (
+            runner_state.train_state,
+            runner_state.env_state,
+            runner_state.last_obs,
+            runner_state.key,
+        )
+        
+        final_carry, transitions = jax.lax.scan(
+            step_fn, initial_carry, None, length=config.num_steps
+        )
+        
+        train_state, env_state, last_obs, rng = final_carry
+        obs, actions, log_probs, values, rewards, dones = transitions
+        
+        trajectory = Trajectory(
+            obs=obs, actions=actions, log_probs=log_probs,
+            values=values, rewards=rewards, dones=dones,
+        )
+        
+        new_runner_state = runner_state.replace(
+            train_state=train_state,
+            env_state=env_state,
+            last_obs=last_obs,
+            key=rng,
+            global_step=runner_state.global_step + config.num_steps * config.num_envs,
+        )
+        return new_runner_state, trajectory
+    
+    @jax.jit
+    def _update_ppo_jit(train_state, trajectory, last_obs, update_key, ent_coef):
+        """JIT-compiled PPO update."""
+        return update_ppo(
+            train_state, trajectory, last_obs, network, config,
+            update_key, ent_coef, optimizer
+        )
+    
+    print("JIT compiling training step (this takes a few minutes)...")
+    
     # Training loop
     for update in range(config.num_updates):
         update_start = time.time()
         
-        # Compute current entropy coefficient (annealing)
+        # Compute current entropy coefficient (annealing) - use jnp to avoid retracing
         progress = runner_state.global_step / config.total_timesteps
-        ent_coef = config.ppo.ent_coef + (config.ppo.ent_coef_final - config.ppo.ent_coef) * progress
+        ent_coef = jnp.float32(config.ppo.ent_coef + (config.ppo.ent_coef_final - config.ppo.ent_coef) * progress)
         
-        # Collect rollout
-        runner_state, trajectory = collect_rollout(
-            runner_state, env, network, config
-        )
+        # Collect rollout (JIT compiled)
+        runner_state, trajectory = _collect_rollout_jit(runner_state)
         
-        # PPO update
+        # PPO update (JIT compiled)
         key, update_key = jax.random.split(runner_state.key)
         runner_state = runner_state.replace(key=key)
         
-        train_state, ppo_metrics = update_ppo(
+        train_state, ppo_metrics = _update_ppo_jit(
             runner_state.train_state,
             trajectory,
             runner_state.last_obs,
-            network,
-            config,
             update_key,
             ent_coef,
-            optimizer,
         )
         runner_state = runner_state.replace(train_state=train_state)
         
+        # Block until computation is done (for accurate timing)
+        jax.block_until_ready(train_state.params)
+        
         # Compute episode metrics
-        episode_rewards = trajectory.rewards.sum(axis=0).mean()
+        episode_rewards = float(trajectory.rewards.sum(axis=0).mean())
         
         # Log metrics
         if update % config.logging.log_interval == 0:
