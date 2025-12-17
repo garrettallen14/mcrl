@@ -33,8 +33,13 @@ from mcrl.utils.observations_fast import (
     get_facing_blocks_fast,
     encode_inventory_fast,
     get_player_state_fast,
+    get_observation_fused,  # Ultra-fast fused observation
 )
-from mcrl.utils.rewards import calculate_milestone_reward, check_episode_done
+from mcrl.utils.rewards import (
+    calculate_milestone_reward, 
+    check_episode_done,
+    calculate_simple_wood_reward,  # Import at module level for JIT
+)
 
 
 class StepResult(NamedTuple):
@@ -47,21 +52,8 @@ class StepResult(NamedTuple):
 
 
 def _get_observation_fast(state: GameState) -> dict:
-    """Fast observation extraction using optimized functions."""
-    return {
-        "local_voxels": get_local_voxels_fast(
-            state.world.padded_blocks, 
-            state.player.pos
-        ),
-        "facing_blocks": get_facing_blocks_fast(
-            state.world.blocks,
-            state.player.pos,
-            state.player.rot
-        ),
-        "inventory": encode_inventory_fast(state.player.inventory),
-        "player_state": get_player_state_fast(state.player),
-        "tick": state.world.tick,
-    }
+    """Fast observation extraction using optimized fused function."""
+    return get_observation_fused(state)
 
 
 @struct.dataclass
@@ -146,11 +138,11 @@ class MinecraftEnv:
         action: jnp.ndarray,
     ) -> tuple[GameState, dict, jnp.ndarray, jnp.ndarray, dict]:
         """Execute one step (internal, JIT-compiled)."""
-        # Store previous state for reward calculation
-        prev_flags = state.reward_flags
+        # Store previous state for dense reward calculation
+        prev_state = state
         
-        # Process action
-        state = process_action(state, action)
+        # Process action (returns state and broken block type for dense rewards)
+        state, broken_block_type = process_action(state, action)
         
         # Apply physics
         state = apply_physics(state, TICK_DURATION)
@@ -159,9 +151,14 @@ class MinecraftEnv:
         new_world = state.world.replace(tick=state.world.tick + 1)
         state = state.replace(world=new_world)
         
-        # Calculate reward
-        reward, new_flags = calculate_milestone_reward(state)
+        # Simple reward: Wood → Planks (for initial testing)
+        reward, new_flags = calculate_simple_wood_reward(state, prev_state, broken_block_type)
         state = state.replace(reward_flags=new_flags)
+        
+        # TODO: Re-enable full reward system later
+        # milestone_reward, new_flags = calculate_milestone_reward(state)
+        # dense_reward, state = calculate_dense_reward(state, prev_state, broken_block_type)
+        # reward = milestone_reward + dense_reward
         
         # Check done
         done, success = check_episode_done(state)

@@ -284,12 +284,16 @@ def get_block_drop(block_type: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     return item, count
 
 
-def process_mining(state: GameState) -> GameState:
+def process_mining(state: GameState) -> tuple[GameState, jnp.ndarray]:
     """
     Process one tick of mining/attacking.
     
     Mining is progressive: player must continue attacking the same block
     until it breaks. Switching targets resets progress.
+    
+    Returns:
+        state: Updated game state
+        broken_block_type: BlockType of the block that was broken, or -1 if none
     """
     player = state.player
     world = state.world
@@ -363,7 +367,10 @@ def process_mining(state: GameState) -> GameState:
         mining_progress=new_mining_progress,
     )
     
-    return state.replace(world=new_world, player=new_player)
+    # Return broken block type (-1 if nothing broke)
+    broken_block_type = jnp.where(block_breaks, block_type, jnp.int32(-1))
+    
+    return state.replace(world=new_world, player=new_player), broken_block_type
 
 
 def place_block(state: GameState, item_type: int) -> GameState:

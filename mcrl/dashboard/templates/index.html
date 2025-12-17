@@ -114,6 +114,59 @@
             </div>
         </section>
 
+        <!-- Agent Position Analytics -->
+        <section class="mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-200">Agent Positions</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Heatmap -->
+                <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                    <h3 class="text-sm font-semibold mb-2 text-gray-300">Top-Down View (X-Z)</h3>
+                    <div class="flex justify-center">
+                        <canvas id="heatmap-canvas" width="256" height="256" class="rounded border border-gray-600"></canvas>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>Low density</span>
+                        <span>High density</span>
+                    </div>
+                </div>
+                
+                <!-- Depth Histogram -->
+                <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                    <h3 class="text-sm font-semibold mb-2 text-gray-300">Depth Distribution (Y)</h3>
+                    <div class="chart-wrapper-small">
+                        <canvas id="depth-chart"></canvas>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>Bedrock</span>
+                        <span>Surface</span>
+                    </div>
+                </div>
+                
+                <!-- Position Stats -->
+                <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                    <h3 class="text-sm font-semibold mb-2 text-gray-300">Statistics</h3>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Agents</span>
+                            <span class="text-white font-mono" id="stat-agents">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Mean Y (depth)</span>
+                            <span class="text-white font-mono" id="stat-mean-y">--</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Deepest Agent</span>
+                            <span class="text-white font-mono" id="stat-min-y">--</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Horizontal Spread</span>
+                            <span class="text-white font-mono" id="stat-spread">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- Log Output -->
         <section class="mb-8">
             <h2 class="text-xl font-semibold mb-4 text-gray-200">Training Log</h2>
@@ -456,10 +509,95 @@
             }
         }
 
+        // ====== Agent Position Analytics ======
+        let depthChart = null;
+        const heatmapCanvas = document.getElementById('heatmap-canvas');
+        const heatmapCtx = heatmapCanvas ? heatmapCanvas.getContext('2d') : null;
+        
+        function initDepthChart() {
+            const ctx = document.getElementById('depth-chart');
+            if (!ctx) return;
+            depthChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: Array.from({length: 20}, (_, i) => ''),
+                    datasets: [{
+                        data: Array(20).fill(0),
+                        backgroundColor: '#10B981',
+                        borderWidth: 0,
+                    }]
+                },
+                options: {
+                    ...chartConfig,
+                    indexAxis: 'y',
+                    scales: {
+                        x: { display: false },
+                        y: { display: false }
+                    }
+                }
+            });
+        }
+        
+        function renderHeatmap(heatmapData) {
+            if (!heatmapCtx || !heatmapData) return;
+            
+            const gridSize = heatmapData.length;
+            const cellSize = 256 / gridSize;
+            
+            // Find max for normalization
+            let maxVal = 1;
+            for (let row of heatmapData) {
+                for (let val of row) {
+                    if (val > maxVal) maxVal = val;
+                }
+            }
+            
+            // Draw cells
+            for (let i = 0; i < gridSize; i++) {
+                for (let j = 0; j < gridSize; j++) {
+                    const val = heatmapData[i][j] / maxVal;
+                    // Green gradient: dark to bright
+                    const r = Math.floor(16 + val * 20);
+                    const g = Math.floor(40 + val * 180);
+                    const b = Math.floor(32 + val * 80);
+                    heatmapCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                    heatmapCtx.fillRect(j * cellSize, i * cellSize, cellSize, cellSize);
+                }
+            }
+        }
+        
+        function updateDepthChart(histogram) {
+            if (!depthChart || !histogram) return;
+            depthChart.data.datasets[0].data = histogram.slice().reverse();
+            depthChart.update('none');
+        }
+        
+        function updatePositionStats(stats) {
+            if (!stats) return;
+            document.getElementById('stat-agents').textContent = stats.num_agents || 0;
+            document.getElementById('stat-mean-y').textContent = (stats.mean_y || 0).toFixed(1);
+            document.getElementById('stat-min-y').textContent = (stats.min_y || 0).toFixed(1);
+            document.getElementById('stat-spread').textContent = (stats.spread || 0).toFixed(1);
+        }
+        
+        // Fetch analytics periodically
+        async function fetchAnalytics() {
+            try {
+                const response = await fetch('/api/analytics');
+                const data = await response.json();
+                if (data.heatmap) renderHeatmap(data.heatmap);
+                if (data.depth_histogram) updateDepthChart(data.depth_histogram);
+                if (data.position_stats) updatePositionStats({...data.position_stats, num_agents: data.num_agents});
+            } catch (e) {
+                // Silent fail - analytics might not be available
+            }
+        }
+
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             initMilestones();
             initCharts();
+            initDepthChart();
             
             // Try SSE first, will fall back to polling
             addLog('Dashboard initialized, connecting to server...');
@@ -468,6 +606,10 @@
             // Fetch milestones every 5 seconds
             setInterval(fetchMilestones, 5000);
             fetchMilestones();
+            
+            // Fetch analytics every 2 seconds
+            setInterval(fetchAnalytics, 2000);
+            fetchAnalytics();
         });
     </script>
 </body>

@@ -79,6 +79,42 @@ async def get_milestones():
     }
 
 
+@app.post("/api/metrics")
+async def post_metrics(request: Request):
+    """Receive metrics from training process."""
+    collector = get_collector()
+    data = await request.json()
+    collector.record(data)
+    return {"status": "ok"}
+
+
+# Store latest analytics for polling
+_latest_analytics = {
+    "heatmap": [[0] * 16 for _ in range(16)],
+    "depth_histogram": [0] * 20,
+    "position_stats": {},
+    "num_agents": 0,
+}
+
+
+@app.post("/api/analytics")
+async def post_analytics(request: Request):
+    """Receive agent position analytics from training."""
+    global _latest_analytics
+    data = await request.json()
+    _latest_analytics = data
+    # Also notify SSE listeners
+    collector = get_collector()
+    collector.record({"_analytics": True, **data})
+    return {"status": "ok"}
+
+
+@app.get("/api/analytics")
+async def get_analytics():
+    """Get latest agent position analytics."""
+    return _latest_analytics
+
+
 @app.get("/api/timeseries/{field}")
 async def get_timeseries(field: str, n: int = 1000):
     """Get timeseries data for a metric."""

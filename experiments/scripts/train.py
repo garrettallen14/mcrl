@@ -37,6 +37,7 @@ from mcrl.training.config import (
     get_fast_debug_config, 
     get_baseline_config,
     get_high_explore_config,
+    get_ultra_fast_config,
 )
 from mcrl.training.train import train, create_train_state
 from mcrl.training.profiling import (
@@ -53,6 +54,8 @@ def parse_args():
     # Config
     parser.add_argument("--config", type=str, help="Path to config YAML")
     parser.add_argument("--debug", action="store_true", help="Quick debug run")
+    parser.add_argument("--ultra-fast", action="store_true", 
+                        help="Use UltraFast config (no 3D conv, max throughput)")
     parser.add_argument("--preset", type=str, choices=["baseline", "high_explore"],
                         default="baseline", help="Config preset")
     
@@ -99,6 +102,8 @@ def create_config(args) -> TrainConfig:
         config = TrainConfig.from_yaml(args.config)
     elif args.debug:
         config = get_fast_debug_config()
+    elif getattr(args, 'ultra_fast', False):
+        config = get_ultra_fast_config()
     elif args.preset == "high_explore":
         config = get_high_explore_config()
     else:

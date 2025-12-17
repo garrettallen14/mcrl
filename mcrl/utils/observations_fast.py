@@ -222,6 +222,106 @@ def get_full_observation_fast(
 
 
 # ============================================================================
+# Ultra-fast fused observation (minimizes allocations)
+# ============================================================================
+
+# Pre-computed normalization constants
+_POS_NORM = jnp.float32(1.0 / 64.0)
+_PITCH_NORM = jnp.float32(1.0 / 90.0)
+_YAW_NORM = jnp.float32(1.0 / 180.0)
+_HEALTH_NORM = jnp.float32(1.0 / 20.0)
+
+# Pre-computed ray sample distances
+_RAY_DISTANCES = jnp.linspace(0.5, 4.0, 8, dtype=jnp.float32)
+
+
+def get_observation_fused(state) -> dict:
+    """
+    Ultra-fast fused observation extraction.
+    
+    Optimizations:
+    - Pre-computed normalization constants
+    - Minimized intermediate allocations
+    - Pre-computed ray distances
+    - Direct struct field access
+    
+    Args:
+        state: GameState
+    
+    Returns:
+        obs: Dict with all observation components
+    """
+    player = state.player
+    world = state.world
+    
+    # === Local voxels (17³) - single dynamic_slice ===
+    pos_int = jnp.floor(player.pos).astype(jnp.int32)
+    local_voxels = jax.lax.dynamic_slice(
+        world.padded_blocks,
+        (pos_int[0], pos_int[1], pos_int[2]),
+        (LOCAL_OBS_SIZE, LOCAL_OBS_SIZE, LOCAL_OBS_SIZE)
+    )
+    
+    # === Facing blocks - vectorized ray ===
+    W, H, D = world.blocks.shape
+    eye = player.pos + jnp.array([0.0, 1.62, 0.0])
+    
+    pitch_rad = player.rot[0] * (jnp.pi / 180.0)
+    yaw_rad = player.rot[1] * (jnp.pi / 180.0)
+    
+    cos_pitch = jnp.cos(pitch_rad)
+    direction = jnp.array([
+        cos_pitch * jnp.sin(yaw_rad),
+        -jnp.sin(pitch_rad),
+        cos_pitch * jnp.cos(yaw_rad),
+    ])
+    
+    # All ray positions at once
+    positions = eye[None, :] + direction[None, :] * _RAY_DISTANCES[:, None]
+    block_pos = jnp.floor(positions).astype(jnp.int32)
+    
+    # Bounds check and gather
+    in_bounds = (
+        (block_pos[:, 0] >= 0) & (block_pos[:, 0] < W) &
+        (block_pos[:, 1] >= 0) & (block_pos[:, 1] < H) &
+        (block_pos[:, 2] >= 0) & (block_pos[:, 2] < D)
+    )
+    safe_pos = jnp.clip(block_pos, 0, jnp.array([W-1, H-1, D-1]))
+    facing = world.blocks[safe_pos[:, 0], safe_pos[:, 1], safe_pos[:, 2]]
+    facing = jnp.where(in_bounds, facing, BlockType.AIR)
+    
+    # === Inventory - vectorized matching ===
+    matches = player.inventory[:, 0:1] == TRACKED_ITEMS[None, :]
+    inventory = jnp.sum(player.inventory[:, 1:2] * matches, axis=0).astype(jnp.float32)
+    
+    # === Player state - fused array construction ===
+    player_state = jnp.array([
+        player.pos[0] * _POS_NORM,
+        player.pos[1] * _POS_NORM,
+        player.pos[2] * _POS_NORM,
+        player.vel[0],
+        player.vel[1],
+        player.vel[2],
+        player.rot[0] * _PITCH_NORM,
+        player.rot[1] * _YAW_NORM,
+        player.health * _HEALTH_NORM,
+        player.hunger * _HEALTH_NORM,
+        player.on_ground.astype(jnp.float32),
+        player.is_sprinting.astype(jnp.float32),
+        player.is_sneaking.astype(jnp.float32),
+        player.mining_progress.astype(jnp.float32),
+    ], dtype=jnp.float32)
+    
+    return {
+        "local_voxels": local_voxels,
+        "facing_blocks": facing,
+        "inventory": inventory,
+        "player_state": player_state,
+        "tick": world.tick,
+    }
+
+
+# ============================================================================
 # Optimized raycast for mining
 # ============================================================================
 

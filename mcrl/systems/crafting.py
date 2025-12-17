@@ -6,15 +6,30 @@ This is key for sample efficiency - no need to learn inventory navigation.
 
 Recipes are defined as:
     (output_item, output_count, [(input_item, input_count), ...])
+
+Performance notes:
+    - Crafting table/furnace search is fully vectorized using dynamic_slice
+    - No Python loops in JIT-compiled code paths
 """
 
 import jax
 import jax.numpy as jnp
 from typing import NamedTuple
+from functools import partial
 
 from mcrl.core.types import ItemType, BlockType
 from mcrl.core.state import GameState
 from mcrl.systems.inventory import has_item, add_item, remove_item, get_item_count
+
+
+# Pre-computed offset grid for nearby block search (vectorized)
+# Search radius: 4 blocks horizontal, 2 blocks vertical = 9x5x9 = 405 positions
+_SEARCH_OFFSETS = jnp.stack(jnp.meshgrid(
+    jnp.arange(-4, 5),   # dx: -4 to +4
+    jnp.arange(-2, 3),   # dy: -2 to +2  
+    jnp.arange(-4, 5),   # dz: -4 to +4
+    indexing='ij'
+), axis=-1).reshape(-1, 3)  # Shape: (405, 3)
 
 
 class Recipe(NamedTuple):
@@ -165,75 +180,67 @@ FUELS = {
 }
 
 
+def _check_block_nearby_vectorized(
+    world_blocks: jnp.ndarray,
+    player_pos: jnp.ndarray,
+    target_blocks: jnp.ndarray,  # Array of block types to search for
+) -> jnp.ndarray:
+    """
+    Vectorized search for blocks near player position.
+    
+    Uses pre-computed offsets to check all 405 positions in parallel.
+    
+    Args:
+        world_blocks: The world blocks array
+        player_pos: Player position (int32)
+        target_blocks: Array of block types to match
+    
+    Returns:
+        found: Boolean whether any target block was found
+    """
+    W, H, D = world_blocks.shape
+    
+    # Compute all check positions at once: (405, 3)
+    check_positions = player_pos[None, :] + _SEARCH_OFFSETS
+    
+    # Vectorized bounds check: (405,)
+    in_bounds = (
+        (check_positions[:, 0] >= 0) & (check_positions[:, 0] < W) &
+        (check_positions[:, 1] >= 0) & (check_positions[:, 1] < H) &
+        (check_positions[:, 2] >= 0) & (check_positions[:, 2] < D)
+    )
+    
+    # Clamp positions for safe indexing
+    safe_pos = jnp.clip(
+        check_positions,
+        jnp.array([0, 0, 0]),
+        jnp.array([W-1, H-1, D-1])
+    )
+    
+    # Gather all block types at once: (405,)
+    blocks = world_blocks[safe_pos[:, 0], safe_pos[:, 1], safe_pos[:, 2]]
+    
+    # Mask out-of-bounds to AIR
+    blocks = jnp.where(in_bounds, blocks, BlockType.AIR)
+    
+    # Check if any block matches any target: (405, num_targets) -> any
+    matches = (blocks[:, None] == target_blocks[None, :]).any(axis=1)
+    
+    return matches.any()
+
+
 def check_crafting_table_nearby(state: GameState, radius: int = 4) -> jnp.ndarray:
-    """Check if there's a crafting table within reach."""
+    """Check if there's a crafting table within reach (vectorized)."""
     player_pos = state.player.pos.astype(jnp.int32)
-    world = state.world
-    
-    # Check nearby blocks
-    found = jnp.bool_(False)
-    
-    # Simple check: iterate nearby positions
-    for dx in range(-radius, radius + 1):
-        for dy in range(-2, 3):  # Check 2 above and below
-            for dz in range(-radius, radius + 1):
-                check_pos = player_pos + jnp.array([dx, dy, dz])
-                
-                # Bounds check
-                W, H, D = world.shape
-                in_bounds = (
-                    (check_pos[0] >= 0) & (check_pos[0] < W) &
-                    (check_pos[1] >= 0) & (check_pos[1] < H) &
-                    (check_pos[2] >= 0) & (check_pos[2] < D)
-                )
-                
-                block = jnp.where(
-                    in_bounds,
-                    world.blocks[
-                        jnp.clip(check_pos[0], 0, W-1),
-                        jnp.clip(check_pos[1], 0, H-1),
-                        jnp.clip(check_pos[2], 0, D-1)
-                    ],
-                    BlockType.AIR
-                )
-                
-                found = found | (block == BlockType.CRAFTING_TABLE)
-    
-    return found
+    target_blocks = jnp.array([BlockType.CRAFTING_TABLE], dtype=jnp.int32)
+    return _check_block_nearby_vectorized(state.world.blocks, player_pos, target_blocks)
 
 
 def check_furnace_nearby(state: GameState, radius: int = 4) -> jnp.ndarray:
-    """Check if there's a furnace within reach."""
+    """Check if there's a furnace within reach (vectorized)."""
     player_pos = state.player.pos.astype(jnp.int32)
-    world = state.world
-    
-    found = jnp.bool_(False)
-    
-    for dx in range(-radius, radius + 1):
-        for dy in range(-2, 3):
-            for dz in range(-radius, radius + 1):
-                check_pos = player_pos + jnp.array([dx, dy, dz])
-                
-                W, H, D = world.shape
-                in_bounds = (
-                    (check_pos[0] >= 0) & (check_pos[0] < W) &
-                    (check_pos[1] >= 0) & (check_pos[1] < H) &
-                    (check_pos[2] >= 0) & (check_pos[2] < D)
-                )
-                
-                block = jnp.where(
-                    in_bounds,
-                    world.blocks[
-                        jnp.clip(check_pos[0], 0, W-1),
-                        jnp.clip(check_pos[1], 0, H-1),
-                        jnp.clip(check_pos[2], 0, D-1)
-                    ],
-                    BlockType.AIR
-                )
-                
-                found = found | ((block == BlockType.FURNACE) | (block == BlockType.FURNACE_LIT))
-    
-    return found
+    target_blocks = jnp.array([BlockType.FURNACE, BlockType.FURNACE_LIT], dtype=jnp.int32)
+    return _check_block_nearby_vectorized(state.world.blocks, player_pos, target_blocks)
 
 
 def can_craft_recipe(state: GameState, recipe: Recipe) -> jnp.ndarray:

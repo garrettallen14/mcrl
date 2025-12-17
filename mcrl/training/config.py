@@ -122,6 +122,9 @@ class TrainConfig:
     # Use optimized (fast) network
     use_fast_network: bool = True
     
+    # Use ultra-fast network (no 3D conv, maximum throughput)
+    use_ultra_fast_network: bool = False
+    
     # Derived values (computed in __post_init__)
     batch_size: int = field(init=False)
     minibatch_size: int = field(init=False)
@@ -283,4 +286,30 @@ def get_rtx4090_config() -> TrainConfig:
         num_minibatches=32,
         total_timesteps=100_000_000,
         use_fast_network=True,
+    )
+
+
+def get_ultra_fast_config() -> TrainConfig:
+    """
+    Maximum throughput config - uses UltraFastActorCritic (no 3D conv).
+    
+    Best for:
+    - Hyperparameter search
+    - Quick iteration
+    - Memory-constrained setups
+    
+    Trades model capacity for ~2x faster training.
+    """
+    return TrainConfig(
+        world_size=(64, 64, 64),
+        num_envs=4096,  # More envs since network is cheaper
+        num_steps=64,
+        num_minibatches=64,
+        total_timesteps=100_000_000,
+        use_fast_network=True,
+        use_ultra_fast_network=True,
+        ppo=PPOConfig(
+            lr=5e-4,  # Slightly higher LR for simpler model
+            ent_coef=0.02,  # More exploration to compensate for less capacity
+        ),
     )

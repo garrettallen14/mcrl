@@ -211,14 +211,21 @@ def equip_best_pickaxe(state: GameState) -> GameState:
     return state.replace(player=new_player)
 
 
-def process_action(state: GameState, action: jnp.ndarray) -> GameState:
+def process_action(state: GameState, action: jnp.ndarray) -> tuple[GameState, jnp.ndarray]:
     """
     Process a single action and return updated game state.
     
     This is the main action dispatcher. It handles all 25 action types.
+    
+    Returns:
+        state: Updated game state
+        broken_block_type: BlockType that was broken this tick, or -1 if none
     """
     from mcrl.systems.mining import process_mining, place_block
     from mcrl.systems.crafting import process_craft
+    
+    # Track broken block type (default: -1 = none)
+    broken_block_type = jnp.int32(-1)
     
     # Movement actions (0-5)
     is_movement = (action >= Action.NOOP) & (action <= Action.JUMP)
@@ -238,11 +245,11 @@ def process_action(state: GameState, action: jnp.ndarray) -> GameState:
         state
     )
     
-    # Attack/mine (10)
-    state = jax.lax.cond(
+    # Attack/mine (10) - returns (state, broken_block_type)
+    state, broken_block_type = jax.lax.cond(
         action == Action.ATTACK,
         lambda s: process_mining(s),
-        lambda s: s,
+        lambda s: (s, jnp.int32(-1)),
         state
     )
     
@@ -307,4 +314,4 @@ def process_action(state: GameState, action: jnp.ndarray) -> GameState:
         state
     )
     
-    return state
+    return state, broken_block_type

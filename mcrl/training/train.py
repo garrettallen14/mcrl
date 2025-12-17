@@ -113,9 +113,13 @@ def create_train_state(
     """
     key, init_key = jax.random.split(key)
     
-    # Create network - use fast network if configured
-    if getattr(config, 'use_fast_network', False):
-        network = create_fast_network(num_actions=25)
+    # Create network - use fast/ultra-fast network if configured
+    if getattr(config, 'use_ultra_fast_network', False):
+        network = create_fast_network(num_actions=25, ultra_fast=True)
+        params = init_fast_network(network, init_key)
+        print(f"Using UltraFastActorCritic ({count_params(params):,} params)")
+    elif getattr(config, 'use_fast_network', False):
+        network = create_fast_network(num_actions=25, ultra_fast=False)
         params = init_fast_network(network, init_key)
         print(f"Using FastActorCritic ({count_params(params):,} params)")
     else:
@@ -430,15 +434,29 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
         final_state: Final training state
         metrics_history: List of metrics dicts
     """
-    # Setup dashboard metrics collector if enabled
-    metrics_collector = None
+    # Setup dashboard HTTP client if enabled
+    dashboard_url = None
     if dashboard:
+        import urllib.request
+        dashboard_url = "http://localhost:3000/api/metrics"
+        print(f"Dashboard metrics enabled -> {dashboard_url}")
+    
+    def send_to_dashboard(metrics_dict):
+        """Send metrics to dashboard via HTTP POST."""
+        if dashboard_url is None:
+            return
         try:
-            from mcrl.dashboard.metrics import get_collector
-            metrics_collector = get_collector()
-            print("Dashboard metrics collector enabled")
-        except ImportError:
-            print("Dashboard not available, continuing without it")
+            import json
+            data = json.dumps(metrics_dict).encode('utf-8')
+            req = urllib.request.Request(
+                dashboard_url,
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            urllib.request.urlopen(req, timeout=1)
+        except Exception:
+            pass  # Don't fail training if dashboard is down
     
     # Initialize
     key = jax.random.PRNGKey(config.seed)
@@ -596,8 +614,31 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
             metrics_history.append(metrics)
             
             # Send to dashboard if enabled
-            if metrics_collector is not None:
-                metrics_collector.record(metrics)
+            send_to_dashboard(metrics)
+            
+            # Send agent position analytics every 10 updates
+            if update % 10 == 0 and dashboard_url is not None:
+                try:
+                    from mcrl.utils.analytics import compute_all_analytics
+                    analytics = compute_all_analytics(
+                        runner_state.env_state,
+                        config.world_size,
+                        heatmap_size=16,
+                        depth_bins=20,
+                    )
+                    # Send to dashboard
+                    import json
+                    analytics_url = dashboard_url.replace('/metrics', '/analytics')
+                    data = json.dumps(analytics).encode('utf-8')
+                    req = urllib.request.Request(
+                        analytics_url,
+                        data=data,
+                        headers={'Content-Type': 'application/json'},
+                        method='POST'
+                    )
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass  # Don't fail training if analytics fails
             
             if verbose:
                 # Calculate ETA

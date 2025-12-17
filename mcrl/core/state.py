@@ -78,7 +78,14 @@ class GameState:
     
     # Episode tracking
     done: jnp.bool_
-    reward_flags: jnp.uint32  # Bitmask of collected milestones
+    reward_flags: jnp.uint32  # Bitmask of collected milestones (12 bits)
+    
+    # Dense reward tracking (reset each episode)
+    broken_block_types: jnp.uint32   # Bitmask of block types broken (first-time bonus)
+    picked_up_items: jnp.uint32      # Bitmask of item types picked up (first-time bonus)
+    crafted_recipes: jnp.uint32      # Bitmask of recipes crafted (first-time bonus)
+    min_y_reached: jnp.int32         # Minimum Y level reached (depth exploration)
+    blocks_broken_count: jnp.int32   # Total blocks broken (capped reward)
     
     # Optional: for multi-agent (future)
     # players: PlayerState  # Would be batched [num_players, ...]
@@ -110,9 +117,18 @@ def create_initial_game_state(
     player: PlayerState,
 ) -> GameState:
     """Create initial game state."""
+    # Get initial Y level for depth tracking (surface level)
+    initial_y = jnp.int32(player.pos[1])
+    
     return GameState(
         world=world,
         player=player,
         done=jnp.bool_(False),
         reward_flags=jnp.uint32(0),
+        # Dense reward tracking
+        broken_block_types=jnp.uint32(0),
+        picked_up_items=jnp.uint32(0),
+        crafted_recipes=jnp.uint32(0),
+        min_y_reached=initial_y,
+        blocks_broken_count=jnp.int32(0),
     )
