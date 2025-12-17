@@ -350,6 +350,11 @@ def update_ppo(
                 clip_frac = (jnp.abs(ratio - 1) > config.ppo.clip_eps).mean()
                 explained_var = 1 - jnp.var(minibatch.returns - new_values) / (jnp.var(minibatch.returns) + 1e-8)
                 
+                # Debug: track ratio stats to diagnose KL=0
+                ratio_min = ratio.min()
+                ratio_max = ratio.max()
+                log_prob_diff = (new_log_probs - minibatch.old_log_probs).std()
+                
                 metrics = PPOMetrics(
                     total_loss=total_loss,
                     policy_loss=policy_loss,
@@ -358,6 +363,9 @@ def update_ppo(
                     approx_kl=approx_kl,
                     clip_frac=clip_frac,
                     explained_var=explained_var,
+                    ratio_min=ratio_min,
+                    ratio_max=ratio_max,
+                    log_prob_std=log_prob_diff,
                 )
                 
                 return total_loss, metrics
@@ -404,6 +412,9 @@ def update_ppo(
         approx_kl=jnp.float32(0),
         clip_frac=jnp.float32(0),
         explained_var=jnp.float32(0),
+        ratio_min=jnp.float32(0),
+        ratio_max=jnp.float32(0),
+        log_prob_std=jnp.float32(0),
     )
     
     # Scan over epochs
@@ -652,11 +663,15 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
                 # More precision for KL, show policy_loss for debugging
                 kl_val = float(ppo_metrics.approx_kl)
                 kl_str = f"{kl_val:.6f}" if kl_val < 0.01 else f"{kl_val:.4f}"
+                
+                # Debug: show ratio range to diagnose KL=0
+                ratio_info = f"R[{ppo_metrics.ratio_min:.3f},{ppo_metrics.ratio_max:.3f}]"
+                
                 print(f"[{elapsed:6.0f}s] Update {update:5d} | Step {total_steps:10,} ({100*progress:5.1f}%) | "
                       f"Reward {episode_rewards:7.2f} | "
-                      f"Entropy {ppo_metrics.entropy_loss:.3f} | "
+                      f"Ent {ppo_metrics.entropy_loss:.2f} | "
                       f"KL {kl_str} | "
-                      f"PL {ppo_metrics.policy_loss:.4f} | "
+                      f"{ratio_info} | "
                       f"SPS {steps_per_sec:>8,.0f} | "
                       f"ETA {eta_str}")
     

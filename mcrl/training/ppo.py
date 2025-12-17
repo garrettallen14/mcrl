@@ -33,6 +33,10 @@ class PPOMetrics(NamedTuple):
     approx_kl: jnp.ndarray
     clip_frac: jnp.ndarray
     explained_var: jnp.ndarray
+    # Debug metrics for KL=0 diagnosis
+    ratio_min: jnp.ndarray = jnp.float32(1.0)
+    ratio_max: jnp.ndarray = jnp.float32(1.0)
+    log_prob_std: jnp.ndarray = jnp.float32(0.0)
 
 
 def compute_gae(
