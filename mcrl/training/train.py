@@ -355,22 +355,14 @@ def update_ppo(
                 ratio_max = ratio.max()
                 log_prob_diff = (new_log_probs - minibatch.old_log_probs).std()
                 
-                metrics = PPOMetrics(
-                    total_loss=total_loss,
-                    policy_loss=policy_loss,
-                    value_loss=value_loss,
-                    entropy_loss=-entropy_loss,
-                    approx_kl=approx_kl,
-                    clip_frac=clip_frac,
-                    explained_var=explained_var,
-                    ratio_min=ratio_min,
-                    ratio_max=ratio_max,
-                    log_prob_std=log_prob_diff,
-                )
-                
-                return total_loss, metrics
+                return total_loss, (approx_kl, clip_frac, explained_var, ratio_min, ratio_max, 
+                                   -entropy_loss, policy_loss, value_loss, total_loss)
             
-            (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(train_state.params)
+            (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(train_state.params)
+            approx_kl, clip_frac, explained_var, ratio_min, ratio_max, entropy_loss, policy_loss, value_loss, total_loss = aux
+            
+            # Debug: compute gradient norm
+            grad_norm = jnp.sqrt(sum(jnp.sum(g**2) for g in jax.tree_util.tree_leaves(grads)))
             
             # Update parameters using the optimizer from train_state
             # Note: We use the same optimizer chain created in create_train_state
@@ -378,6 +370,22 @@ def update_ppo(
                 grads, train_state.opt_state, train_state.params
             )
             params = optax.apply_updates(train_state.params, updates)
+            
+            # Debug: compute update norm
+            update_norm = jnp.sqrt(sum(jnp.sum(u**2) for u in jax.tree_util.tree_leaves(updates)))
+            
+            metrics = PPOMetrics(
+                total_loss=total_loss,
+                policy_loss=policy_loss,
+                value_loss=value_loss,
+                entropy_loss=entropy_loss,
+                approx_kl=approx_kl,
+                clip_frac=clip_frac,
+                explained_var=explained_var,
+                ratio_min=ratio_min,
+                ratio_max=ratio_max,
+                log_prob_std=grad_norm,  # Repurpose this field for grad_norm
+            )
             
             train_state = train_state.replace(
                 params=params,
@@ -664,16 +672,17 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
                 kl_val = float(ppo_metrics.approx_kl)
                 kl_str = f"{kl_val:.6f}" if kl_val < 0.01 else f"{kl_val:.4f}"
                 
-                # Debug: show ratio range to diagnose KL=0
+                # Debug: show ratio range and grad norm to diagnose KL=0
                 ratio_info = f"R[{ppo_metrics.ratio_min:.3f},{ppo_metrics.ratio_max:.3f}]"
+                grad_norm = ppo_metrics.log_prob_std  # Repurposed field
                 
                 print(f"[{elapsed:6.0f}s] Update {update:5d} | Step {total_steps:10,} ({100*progress:5.1f}%) | "
                       f"Reward {episode_rewards:7.2f} | "
                       f"Ent {ppo_metrics.entropy_loss:.2f} | "
                       f"KL {kl_str} | "
                       f"{ratio_info} | "
-                      f"SPS {steps_per_sec:>8,.0f} | "
-                      f"ETA {eta_str}")
+                      f"GradN {grad_norm:.2f} | "
+                      f"SPS {steps_per_sec:>8,.0f}")
     
     total_time = time.time() - start_time
     if verbose:
