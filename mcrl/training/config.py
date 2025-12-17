@@ -83,6 +83,7 @@ class LoggingConfig:
     save_interval: int = 100
     eval_interval: int = 50
     profile_interval: int = 100
+    checkpoint_interval: int = 100  # Save checkpoint every N updates
     
     # Checkpointing
     max_checkpoints: int = 5

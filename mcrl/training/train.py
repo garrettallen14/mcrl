@@ -37,6 +37,7 @@ from mcrl.training.ppo import (
     make_minibatches,
     clip_grads,
 )
+from mcrl.utils.checkpoint import save_checkpoint
 
 
 @struct.dataclass
@@ -698,8 +699,35 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
                       f"{ratio_info} | "
                       f"GradN {grad_norm:.2f} | "
                       f"ParamΔ {param_delta:+.4f}")
+        
+        # Save checkpoint periodically
+        if update % config.logging.checkpoint_interval == 0 and update > 0:
+            ckpt_path = os.path.join(config.output_dir, "checkpoints")
+            save_checkpoint(
+                train_state.params,
+                ckpt_path,
+                step=int(runner_state.global_step),
+                metadata={
+                    'update': update,
+                    'reward': float(episode_rewards),
+                    'entropy': float(ppo_metrics.entropy_loss),
+                }
+            )
     
+    # Save final checkpoint
     total_time = time.time() - start_time
+    ckpt_path = os.path.join(config.output_dir, "checkpoints")
+    save_checkpoint(
+        runner_state.train_state.params,
+        ckpt_path,
+        step=int(runner_state.global_step),
+        metadata={
+            'final': True,
+            'total_time': total_time,
+            'total_steps': int(runner_state.global_step),
+        }
+    )
+    
     if verbose:
         print(f"\nTraining complete: {config.total_timesteps:,} steps in {total_time:.1f}s")
         print(f"Average throughput: {config.total_timesteps / total_time:,.0f} steps/sec")
