@@ -324,40 +324,28 @@ def get_observation_fused(state) -> dict:
         player.mining_progress.astype(jnp.float32),
     ], dtype=jnp.float32)
     
-    # === Log compass - direction to nearest log (PLAYER-RELATIVE!) ===
-    # Check positions around player for logs
-    check_positions = pos_int[None, :] + _LOG_SEARCH_OFFSETS
+    # === Log compass - direction to nearest tree (ULTRA-FAST using cached positions!) ===
+    # Use pre-computed tree positions instead of searching every step
+    # This is O(MAX_TREES) instead of O(search_volume) = ~64x faster!
     
-    # Bounds check
-    in_bounds_log = (
-        (check_positions[:, 0] >= 0) & (check_positions[:, 0] < W) &
-        (check_positions[:, 1] >= 0) & (check_positions[:, 1] < H) &
-        (check_positions[:, 2] >= 0) & (check_positions[:, 2] < D)
-    )
+    tree_pos = world.tree_positions.astype(jnp.float32)  # [MAX_TREES, 3]
+    player_pos_3d = player.pos
     
-    # Safe indexing
-    safe_log_pos = jnp.clip(check_positions, 0, jnp.array([W-1, H-1, D-1]))
-    log_blocks = world.blocks[safe_log_pos[:, 0], safe_log_pos[:, 1], safe_log_pos[:, 2]]
-    log_blocks = jnp.where(in_bounds_log, log_blocks, 0)
+    # Compute distances to all cached trees
+    # Valid trees have position >= 0, invalid have -1
+    valid_mask = tree_pos[:, 0] >= 0  # [MAX_TREES]
     
-    # Check if log
-    is_log = (
-        (log_blocks == BlockType.OAK_LOG) |
-        (log_blocks == BlockType.BIRCH_LOG) |
-        (log_blocks == BlockType.SPRUCE_LOG)
-    )
+    # Distance from player to each tree base
+    offsets = tree_pos - player_pos_3d[None, :]  # [MAX_TREES, 3]
+    distances = jnp.sqrt(jnp.sum(offsets ** 2, axis=1))  # [MAX_TREES]
+    distances = jnp.where(valid_mask, distances, 1000.0)  # Invalid trees are "far"
     
-    # Compute distances
-    offsets_float = _LOG_SEARCH_OFFSETS.astype(jnp.float32)
-    log_distances = jnp.sqrt(jnp.sum(offsets_float ** 2, axis=1))
-    log_distances = jnp.where(is_log, log_distances, 1000.0)
+    # Find nearest tree
+    nearest_idx = jnp.argmin(distances)
+    nearest_dist = distances[nearest_idx]
     
-    # Find nearest
-    nearest_idx = jnp.argmin(log_distances)
-    nearest_dist = log_distances[nearest_idx]
-    
-    # Direction to nearest log in WORLD coords
-    dir_world = offsets_float[nearest_idx]
+    # Direction to nearest tree in WORLD coords
+    dir_world = offsets[nearest_idx]
     dir_len = jnp.maximum(nearest_dist, 0.01)
     dir_world_norm = dir_world / dir_len
     

@@ -32,6 +32,7 @@ ORE_DISTRIBUTION = {
 TREE_DENSITY = 0.01  # Probability of tree at valid surface location
 TREE_MIN_HEIGHT = 4
 TREE_MAX_HEIGHT = 7
+MAX_TREES = 64  # Maximum trees to cache per world (for O(1) log finding)
 
 # =============================================================================
 # Physics Constants

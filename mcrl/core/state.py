@@ -22,11 +22,14 @@ class WorldState:
         padded_blocks: Padded version for fast observation extraction
         tick: Current game tick
         seed: World seed for procedural generation
+        tree_positions: Pre-computed tree base positions [MAX_TREES, 3] for fast log finding
     """
     blocks: jnp.ndarray  # [W, H, D] uint8
     padded_blocks: jnp.ndarray  # [W+16, H+16, D+16] uint8 - padded for fast obs
     tick: jnp.int32
     seed: jnp.uint32
+    tree_positions: jnp.ndarray  # [MAX_TREES, 3] int32 - cached tree positions for O(1) lookup
+    num_trees: jnp.int32  # Actual number of trees (rest are padded with -1)
     
     @property
     def shape(self) -> tuple[int, int, int]:

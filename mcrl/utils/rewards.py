@@ -426,7 +426,7 @@ _LOG_SEARCH_OFFSETS = jnp.stack(jnp.meshgrid(
 
 
 def _find_nearest_log_distance(world_blocks: jnp.ndarray, player_pos: jnp.ndarray) -> jnp.ndarray:
-    """Find distance to nearest log block (vectorized)."""
+    """Find distance to nearest log block (vectorized) - SLOW, use _find_nearest_tree_distance instead."""
     W, H, D = world_blocks.shape
     pos_int = player_pos.astype(jnp.int32)
     
@@ -460,6 +460,30 @@ def _find_nearest_log_distance(world_blocks: jnp.ndarray, player_pos: jnp.ndarra
     
     # Set non-log distances to large value
     distances = jnp.where(is_log, distances, 1000.0)
+    
+    return jnp.min(distances)
+
+
+def _find_nearest_tree_distance_fast(tree_positions: jnp.ndarray, player_pos: jnp.ndarray) -> jnp.ndarray:
+    """
+    Find distance to nearest tree using cached positions - ULTRA FAST!
+    
+    Args:
+        tree_positions: [MAX_TREES, 3] cached tree base positions
+        player_pos: [3] player position
+    
+    Returns:
+        Distance to nearest tree (or 1000.0 if no trees)
+    """
+    # Valid trees have position >= 0
+    valid_mask = tree_positions[:, 0] >= 0
+    
+    # Compute distances
+    offsets = tree_positions.astype(jnp.float32) - player_pos[None, :]
+    distances = jnp.sqrt(jnp.sum(offsets ** 2, axis=1))
+    
+    # Invalid trees are "far"
+    distances = jnp.where(valid_mask, distances, 1000.0)
     
     return jnp.min(distances)
 
@@ -542,10 +566,10 @@ def calculate_simple_wood_reward(
     already_got_log = (flags >> 0) & 1
     
     # ─────────────────────────────────────────────────────────────────────────
-    # SHAPING: Distance to nearest log (potential-based)
+    # SHAPING: Distance to nearest log (potential-based) - FAST using cached trees
     # ─────────────────────────────────────────────────────────────────────────
-    curr_dist = _find_nearest_log_distance(state.world.blocks, state.player.pos)
-    prev_dist = _find_nearest_log_distance(prev_state.world.blocks, prev_state.player.pos)
+    curr_dist = _find_nearest_tree_distance_fast(state.world.tree_positions, state.player.pos)
+    prev_dist = _find_nearest_tree_distance_fast(prev_state.world.tree_positions, prev_state.player.pos)
     
     # Reward for getting closer (only if we haven't got log yet)
     dist_improvement = prev_dist - curr_dist  # positive = got closer

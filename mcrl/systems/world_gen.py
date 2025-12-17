@@ -24,6 +24,7 @@ from mcrl.core.constants import (
     TREE_MIN_HEIGHT,
     TREE_MAX_HEIGHT,
     LOCAL_OBS_RADIUS,
+    MAX_TREES,
 )
 
 
@@ -113,10 +114,14 @@ def _place_trees_vectorized(
     blocks: jnp.ndarray,
     height_map: jnp.ndarray,
     density: float = TREE_DENSITY,
-) -> jnp.ndarray:
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.int32]:
     """
-    Place trees on grass blocks.
-    Simplified: just logs, no leaves for now (faster).
+    Place trees on grass blocks and return their positions.
+    
+    Returns:
+        blocks: Updated block array with trees
+        tree_positions: [MAX_TREES, 3] array of tree base positions (x, y, z)
+        num_trees: Actual number of trees placed
     """
     W, H, D = blocks.shape
     
@@ -128,6 +133,25 @@ def _place_trees_vectorized(
     # Trees only on grass, with spacing
     valid_tree = tree_noise < density
     
+    # Extract tree positions for caching (HUGE speedup for log finding!)
+    # Get flat indices of valid trees
+    tree_mask_flat = valid_tree.flatten()
+    x_flat = jnp.arange(W)[:, None].repeat(D, axis=1).flatten()
+    z_flat = jnp.arange(D)[None, :].repeat(W, axis=0).flatten()
+    height_flat = height_map.flatten()
+    
+    # Filter to valid trees and take up to MAX_TREES
+    valid_indices = jnp.where(tree_mask_flat, jnp.arange(W * D), W * D * 2)
+    sorted_indices = jnp.sort(valid_indices)[:MAX_TREES]
+    
+    # Extract positions (with padding for unused slots)
+    tree_x = jnp.where(sorted_indices < W * D, x_flat[sorted_indices % (W * D)], -1)
+    tree_z = jnp.where(sorted_indices < W * D, z_flat[sorted_indices % (W * D)], -1)
+    tree_y = jnp.where(sorted_indices < W * D, height_flat[sorted_indices % (W * D)] + 1, -1)
+    
+    tree_positions = jnp.stack([tree_x, tree_y, tree_z], axis=-1).astype(jnp.int32)
+    num_trees = jnp.sum(sorted_indices < W * D).astype(jnp.int32)
+    
     # For each potential tree position, place log column
     x_coords = jnp.arange(W)[:, None, None]
     z_coords = jnp.arange(D)[None, None, :]
@@ -137,7 +161,7 @@ def _place_trees_vectorized(
     surface = height_map[:, None, :]  # [W, 1, D]
     
     # Tree trunk mask: above surface, below surface + tree_height, at tree position
-    tree_mask = (
+    trunk_mask = (
         valid_tree[:, None, :] &
         (y_coords > surface) &
         (y_coords <= surface + tree_heights[:, None, :])
@@ -145,7 +169,7 @@ def _place_trees_vectorized(
     
     # Only place in air
     is_air = blocks == BlockType.AIR
-    blocks = jnp.where(tree_mask & is_air, BlockType.OAK_LOG, blocks)
+    blocks = jnp.where(trunk_mask & is_air, BlockType.OAK_LOG, blocks)
     
     # Add leaves around top (simplified sphere)
     leaf_y = surface + tree_heights[:, None, :]
@@ -157,7 +181,7 @@ def _place_trees_vectorized(
     blocks = jnp.where(leaf_mask & is_air & (blocks != BlockType.OAK_LOG), 
                        BlockType.OAK_LEAVES, blocks)
     
-    return blocks
+    return blocks, tree_positions, num_trees
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3))
@@ -210,8 +234,8 @@ def generate_world(
     # Place ores in stone
     blocks = _place_ores(k_ore, blocks, height_map)
     
-    # Place trees
-    blocks = _place_trees_vectorized(k_tree, blocks, height_map)
+    # Place trees and get cached positions for fast log finding
+    blocks, tree_positions, num_trees = _place_trees_vectorized(k_tree, blocks, height_map)
     
     # Create padded version for fast observation extraction
     # Pad with BEDROCK on all sides
@@ -228,6 +252,8 @@ def generate_world(
         padded_blocks=padded_blocks,
         tick=jnp.int32(0),
         seed=key[0],
+        tree_positions=tree_positions,
+        num_trees=num_trees,
     )
 
 
