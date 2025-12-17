@@ -134,11 +134,15 @@ def create_train_state(
         print(f"Using ActorCritic ({count_params(params):,} params)")
     
     # Create optimizer with learning rate schedule
+    # IMPORTANT: transition_steps must account for ALL optimizer.update calls
+    # Each PPO update has: update_epochs * num_minibatches optimizer steps
+    total_optimizer_steps = config.num_updates * config.update_epochs * config.num_minibatches
+    
     if config.ppo.lr_schedule == 'linear':
         lr_schedule = optax.linear_schedule(
             init_value=config.ppo.lr,
             end_value=0.0,
-            transition_steps=config.num_updates,
+            transition_steps=total_optimizer_steps,
         )
     else:
         lr_schedule = config.ppo.lr
