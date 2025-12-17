@@ -412,11 +412,12 @@ def get_shaped_reward(
 # SIMPLE REWARD: Wood → Planks (for initial testing/debugging)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Pre-computed search offsets for finding nearby logs (smaller radius for speed)
-_LOG_SEARCH_RADIUS = 8
+# Pre-computed search offsets for finding nearby logs
+# IMPORTANT: Must be large enough to cover spawn distance to nearest tree!
+_LOG_SEARCH_RADIUS = 20  # Increased from 8 to cover typical spawn distances
 _LOG_SEARCH_OFFSETS = jnp.stack(jnp.meshgrid(
     jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
-    jnp.arange(-2, 10),  # Check ground to tree height
+    jnp.arange(-2, 15),  # Check ground to tree canopy height
     jnp.arange(-_LOG_SEARCH_RADIUS, _LOG_SEARCH_RADIUS + 1),
     indexing='ij'
 ), axis=-1).reshape(-1, 3)
