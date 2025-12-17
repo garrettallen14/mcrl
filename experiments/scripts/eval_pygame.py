@@ -106,32 +106,80 @@ def get_block_color(block_type: int) -> tuple:
 def render_top_down_map(surface: pygame.Surface, voxels: np.ndarray, 
                         player_pos: np.ndarray, player_yaw: float,
                         rect: pygame.Rect):
-    """Render top-down view of the local voxels."""
+    """Render top-down view of the local voxels with proper block representation."""
     size = voxels.shape[0]  # 17x17x17
     cell_size = rect.width // size
     
-    # Fill background
-    pygame.draw.rect(surface, (20, 20, 30), rect)
+    # Fill background with dark
+    pygame.draw.rect(surface, (20, 25, 30), rect)
     
+    # First pass: draw terrain
     for x in range(size):
         for z in range(size):
-            # Find highest non-air block
-            highest_block = BlockType.AIR
+            # Find highest non-air, non-leaf block for ground
+            ground_block = BlockType.AIR
+            tree_block = BlockType.AIR
+            ground_y = 0
+            
             for y in range(size - 1, -1, -1):
-                if voxels[x, y, z] != BlockType.AIR:
-                    highest_block = voxels[x, y, z]
-                    break
+                block = voxels[x, y, z]
+                if block != BlockType.AIR:
+                    if block in [BlockType.OAK_LEAVES, BlockType.OAK_LOG, 
+                                BlockType.BIRCH_LOG, BlockType.SPRUCE_LOG]:
+                        tree_block = block
+                    else:
+                        ground_block = block
+                        ground_y = y
+                        break
             
-            color = get_block_color(highest_block)
+            # Use ground block for base terrain
+            if ground_block == BlockType.AIR and tree_block != BlockType.AIR:
+                # Tree on air (shouldn't happen but handle it)
+                color = get_block_color(tree_block)
+            elif ground_block != BlockType.AIR:
+                color = get_block_color(ground_block)
+            else:
+                color = (20, 25, 30)  # Empty/void
             
-            # Draw cell
+            # Draw cell with slight gradient based on height
+            height_shade = min(1.0, 0.7 + ground_y / size * 0.3)
+            shaded_color = tuple(int(c * height_shade) for c in color)
+            
             cell_rect = pygame.Rect(
                 rect.x + x * cell_size,
                 rect.y + z * cell_size,
-                cell_size - 1,
-                cell_size - 1
+                cell_size,
+                cell_size
             )
-            pygame.draw.rect(surface, color, cell_rect)
+            pygame.draw.rect(surface, shaded_color, cell_rect)
+    
+    # Second pass: draw trees on top
+    for x in range(size):
+        for z in range(size):
+            for y in range(size - 1, -1, -1):
+                block = voxels[x, y, z]
+                if block == BlockType.OAK_LOG or block == BlockType.BIRCH_LOG or block == BlockType.SPRUCE_LOG:
+                    # Draw tree trunk
+                    cx = rect.x + x * cell_size + cell_size // 2
+                    cz = rect.y + z * cell_size + cell_size // 2
+                    trunk_color = get_block_color(block)
+                    pygame.draw.circle(surface, trunk_color, (cx, cz), cell_size // 3 + 1)
+                    break
+                elif block == BlockType.OAK_LEAVES:
+                    # Draw leaves
+                    cx = rect.x + x * cell_size + cell_size // 2
+                    cz = rect.y + z * cell_size + cell_size // 2
+                    pygame.draw.circle(surface, (34, 139, 34), (cx, cz), cell_size // 2)
+                    break
+    
+    # Draw grid lines
+    for i in range(size + 1):
+        # Vertical lines
+        x = rect.x + i * cell_size
+        pygame.draw.line(surface, (40, 45, 50), (x, rect.y), (x, rect.y + rect.height), 1)
+        # Horizontal lines
+        y = rect.y + i * cell_size
+        pygame.draw.line(surface, (40, 45, 50), (rect.x, y), (rect.x + rect.width, y), 1)
     
     # Draw player marker
     center = size // 2
@@ -140,7 +188,20 @@ def render_top_down_map(surface: pygame.Surface, voxels: np.ndarray,
     
     # Player triangle pointing in facing direction
     yaw_rad = math.radians(player_yaw)
-    arrow_len = cell_size * 1.5
+    arrow_len = cell_size * 2.0
+    
+    # Draw FOV cone
+    fov_half = math.radians(35)
+    fov_len = cell_size * 5
+    left_fov_x = player_x + math.sin(yaw_rad - fov_half) * fov_len
+    left_fov_z = player_z + math.cos(yaw_rad - fov_half) * fov_len
+    right_fov_x = player_x + math.sin(yaw_rad + fov_half) * fov_len
+    right_fov_z = player_z + math.cos(yaw_rad + fov_half) * fov_len
+    
+    # Semi-transparent FOV (draw as lines since pygame doesn't do alpha easily)
+    pygame.draw.polygon(surface, (60, 60, 100), [
+        (player_x, player_z), (left_fov_x, left_fov_z), (right_fov_x, right_fov_z)
+    ])
     
     # Arrow points
     tip_x = player_x + math.sin(yaw_rad) * arrow_len
@@ -152,99 +213,251 @@ def render_top_down_map(surface: pygame.Surface, voxels: np.ndarray,
     right_x = player_x + math.sin(yaw_rad - 2.5) * arrow_len * 0.5
     right_z = player_z + math.cos(yaw_rad - 2.5) * arrow_len * 0.5
     
-    pygame.draw.polygon(surface, (255, 50, 50), [
+    # Player shadow
+    pygame.draw.polygon(surface, (150, 50, 50), [
+        (tip_x + 2, tip_z + 2), (left_x + 2, left_z + 2), (right_x + 2, right_z + 2)
+    ])
+    # Player arrow
+    pygame.draw.polygon(surface, (255, 80, 80), [
         (tip_x, tip_z), (left_x, left_z), (right_x, right_z)
     ])
-    pygame.draw.circle(surface, (255, 100, 100), (int(player_x), int(player_z)), 5)
+    pygame.draw.polygon(surface, (255, 200, 200), [
+        (tip_x, tip_z), (left_x, left_z), (right_x, right_z)
+    ], 2)
+    
+    # Player center dot
+    pygame.draw.circle(surface, (255, 255, 255), (int(player_x), int(player_z)), 4)
+    pygame.draw.circle(surface, (255, 80, 80), (int(player_x), int(player_z)), 3)
     
     # Border
-    pygame.draw.rect(surface, (100, 100, 100), rect, 2)
+    pygame.draw.rect(surface, (80, 80, 100), rect, 3)
 
 
 def render_side_view(surface: pygame.Surface, voxels: np.ndarray, rect: pygame.Rect):
-    """Render side cross-section view (Y vs X at center Z)."""
+    """Render side cross-section view (Y vs X at center Z) with enhanced visuals."""
     size = voxels.shape[0]
     center = size // 2
     
     cell_w = rect.width // size
     cell_h = rect.height // size
     
-    pygame.draw.rect(surface, (20, 20, 30), rect)
+    # Background gradient (sky to underground)
+    for y in range(rect.height):
+        t = y / rect.height
+        if t < 0.3:
+            # Sky
+            r = int(135 - t * 100)
+            g = int(206 - t * 100)
+            b = int(235 - t * 50)
+        else:
+            # Underground darkness
+            darkness = (t - 0.3) / 0.7
+            r = int(40 * (1 - darkness * 0.5))
+            g = int(35 * (1 - darkness * 0.5))
+            b = int(30 * (1 - darkness * 0.5))
+        pygame.draw.line(surface, (r, g, b), (rect.x, rect.y + y), (rect.x + rect.width, rect.y + y))
     
     for x in range(size):
         for y in range(size):
             block = voxels[x, y, center]
+            
+            if block == BlockType.AIR:
+                continue  # Skip air, show background
+            
             color = get_block_color(block)
             
             # Flip Y so ground is at bottom
             screen_y = size - 1 - y
             
+            # Add depth shading
+            depth = abs(x - center) / size
+            shade = 1.0 - depth * 0.3
+            shaded_color = tuple(int(c * shade) for c in color)
+            
             cell_rect = pygame.Rect(
                 rect.x + x * cell_w,
                 rect.y + screen_y * cell_h,
-                cell_w - 1,
-                cell_h - 1
+                cell_w,
+                cell_h
             )
-            pygame.draw.rect(surface, color, cell_rect)
+            pygame.draw.rect(surface, shaded_color, cell_rect)
+            
+            # Add subtle border for definition
+            if cell_w > 3:
+                darker = tuple(int(c * 0.7) for c in shaded_color)
+                pygame.draw.rect(surface, darker, cell_rect, 1)
     
-    # Draw player position marker
+    # Draw grid lines (subtle)
+    for i in range(0, size + 1, 2):
+        x = rect.x + i * cell_w
+        pygame.draw.line(surface, (50, 50, 60), (x, rect.y), (x, rect.y + rect.height), 1)
+        y = rect.y + i * cell_h
+        pygame.draw.line(surface, (50, 50, 60), (rect.x, y), (rect.x + rect.width, y), 1)
+    
+    # Draw player position marker (eye level)
     player_x = rect.x + center * cell_w + cell_w // 2
-    player_y = rect.y + (size - 1 - center) * cell_h + cell_h // 2
-    pygame.draw.circle(surface, (255, 50, 50), (int(player_x), int(player_y)), 6)
-    pygame.draw.circle(surface, (255, 255, 255), (int(player_x), int(player_y)), 6, 2)
+    player_y = rect.y + (size - 1 - center - 1) * cell_h + cell_h // 2  # Eye level
     
-    pygame.draw.rect(surface, (100, 100, 100), rect, 2)
+    # Player glow
+    for r in range(12, 4, -2):
+        alpha = int(100 * (12 - r) / 8)
+        pygame.draw.circle(surface, (255, alpha, alpha), (int(player_x), int(player_y)), r)
+    
+    # Player marker
+    pygame.draw.circle(surface, (255, 100, 100), (int(player_x), int(player_y)), 5)
+    pygame.draw.circle(surface, (255, 255, 255), (int(player_x), int(player_y)), 5, 2)
+    
+    # Border
+    pygame.draw.rect(surface, (80, 80, 100), rect, 3)
 
 
 def render_first_person_view(surface: pygame.Surface, voxels: np.ndarray,
                              facing_blocks: np.ndarray, player_rot: np.ndarray,
                              rect: pygame.Rect):
-    """Render simplified first-person view using raycasting."""
-    pygame.draw.rect(surface, (135, 206, 235), rect)  # Sky background
+    """
+    Render proper first-person view using raycasting through the voxel grid.
+    Wolfenstein 3D style renderer adapted for Minecraft voxels.
+    """
+    # Constants
+    FOV = 70  # Field of view in degrees
+    MAX_DIST = 12  # Maximum ray distance
+    NUM_RAYS = rect.width // 4  # One ray per 4 pixels for performance
     
-    # Ground
-    ground_rect = pygame.Rect(rect.x, rect.y + rect.height // 2, rect.width, rect.height // 2)
-    pygame.draw.rect(surface, (34, 100, 34), ground_rect)
+    pitch = player_rot[0]  # Up/down angle
+    yaw = player_rot[1]    # Left/right angle
     
-    # Simple rendering: show what's in front based on facing_blocks
-    num_cols = rect.width // 20
-    col_width = rect.width // num_cols
+    # Pre-calculate ray angles
+    half_fov = FOV / 2
+    ray_angles = np.linspace(-half_fov, half_fov, NUM_RAYS)
     
-    # Use facing blocks to render what's ahead
-    for i, block_type in enumerate(facing_blocks[:8]):
-        if block_type != BlockType.AIR:
-            color = get_block_color(int(block_type))
-            distance = 0.5 + i * 0.5  # Distance in blocks
-            
-            # Calculate apparent size (closer = bigger)
-            apparent_height = int(rect.height * 0.8 / (distance * 0.5 + 0.5))
-            apparent_width = int(col_width * 3 / (distance * 0.5 + 0.5))
-            
-            # Center position
-            center_x = rect.x + rect.width // 2
-            center_y = rect.y + rect.height // 2
-            
-            block_rect = pygame.Rect(
-                center_x - apparent_width // 2,
-                center_y - apparent_height // 2,
-                apparent_width,
-                apparent_height
-            )
-            
-            # Darken based on distance
-            darkening = max(0.3, 1.0 - distance * 0.15)
-            dark_color = tuple(int(c * darkening) for c in color)
-            
-            pygame.draw.rect(surface, dark_color, block_rect)
-            pygame.draw.rect(surface, (0, 0, 0), block_rect, 1)
-            break  # Only show closest block
+    # Voxel grid info
+    size = voxels.shape[0]  # 17x17x17
+    center = size // 2  # Player is at center of voxel grid
     
-    # Crosshair
+    # Sky gradient
+    for y in range(rect.height // 2):
+        # Gradient from light blue at horizon to darker blue at top
+        t = y / (rect.height // 2)
+        r = int(135 * (1 - t * 0.3))
+        g = int(206 * (1 - t * 0.2))
+        b = int(250 * (1 - t * 0.1))
+        pygame.draw.line(surface, (r, g, b), 
+                        (rect.x, rect.y + y), (rect.x + rect.width, rect.y + y))
+    
+    # Ground gradient
+    for y in range(rect.height // 2, rect.height):
+        t = (y - rect.height // 2) / (rect.height // 2)
+        # Gradient from grass to darker at bottom
+        r = int(34 + 20 * (1 - t))
+        g = int(100 + 39 * (1 - t))
+        b = int(34 + 20 * (1 - t))
+        pygame.draw.line(surface, (r, g, b),
+                        (rect.x, rect.y + y), (rect.x + rect.width, rect.y + y))
+    
+    # Column width for rendering
+    col_width = rect.width / NUM_RAYS
+    
+    # Cast rays
+    for ray_idx, angle_offset in enumerate(ray_angles):
+        # Ray direction in world space
+        ray_yaw = math.radians(yaw + angle_offset)
+        ray_pitch = math.radians(pitch)
+        
+        # Direction vector
+        cos_pitch = math.cos(ray_pitch)
+        dir_x = cos_pitch * math.sin(ray_yaw)
+        dir_y = -math.sin(ray_pitch)
+        dir_z = cos_pitch * math.cos(ray_yaw)
+        
+        # Ray march through voxel grid
+        hit_block = BlockType.AIR
+        hit_dist = MAX_DIST
+        hit_side = 0  # 0 = x face, 1 = z face, 2 = y face
+        
+        # Start at player eye position (center of voxel grid, slightly above ground)
+        pos_x, pos_y, pos_z = center + 0.5, center + 1.6, center + 0.5
+        
+        # DDA algorithm for voxel traversal
+        step_size = 0.1
+        for step in range(int(MAX_DIST / step_size)):
+            # Current voxel
+            vx = int(pos_x)
+            vy = int(pos_y)
+            vz = int(pos_z)
+            
+            # Check bounds
+            if 0 <= vx < size and 0 <= vy < size and 0 <= vz < size:
+                block = voxels[vx, vy, vz]
+                if block != BlockType.AIR:
+                    hit_block = block
+                    hit_dist = step * step_size
+                    
+                    # Determine which face was hit for shading
+                    frac_x = pos_x - vx
+                    frac_z = pos_z - vz
+                    if min(frac_x, 1-frac_x) < min(frac_z, 1-frac_z):
+                        hit_side = 0  # X face
+                    else:
+                        hit_side = 1  # Z face
+                    break
+            
+            # Step ray forward
+            pos_x += dir_x * step_size
+            pos_y += dir_y * step_size
+            pos_z += dir_z * step_size
+        
+        # Render column if we hit something
+        if hit_block != BlockType.AIR and hit_dist > 0.1:
+            # Calculate wall height on screen
+            # Fix fisheye effect by using perpendicular distance
+            perp_dist = hit_dist * math.cos(math.radians(angle_offset))
+            wall_height = int(rect.height / (perp_dist * 0.8 + 0.3))
+            wall_height = min(wall_height, rect.height * 2)
+            
+            # Get block color
+            color = get_block_color(int(hit_block))
+            
+            # Apply shading based on distance and face
+            shade = max(0.3, 1.0 - hit_dist / MAX_DIST * 0.7)
+            if hit_side == 0:  # X face is darker
+                shade *= 0.7
+            elif hit_side == 1:  # Z face is medium
+                shade *= 0.85
+            
+            shaded_color = tuple(int(c * shade) for c in color)
+            
+            # Draw column
+            col_x = rect.x + int(ray_idx * col_width)
+            col_top = rect.y + rect.height // 2 - wall_height // 2
+            
+            # Draw the wall strip
+            wall_rect = pygame.Rect(col_x, col_top, max(1, int(col_width) + 1), wall_height)
+            pygame.draw.rect(surface, shaded_color, wall_rect)
+            
+            # Add edge highlighting for closer blocks
+            if hit_dist < 3 and col_width > 2:
+                # Darker edge on right side
+                edge_color = tuple(int(c * 0.7) for c in shaded_color)
+                pygame.draw.line(surface, edge_color, 
+                               (col_x + int(col_width), col_top),
+                               (col_x + int(col_width), col_top + wall_height))
+    
+    # Draw crosshair
     center_x = rect.x + rect.width // 2
     center_y = rect.y + rect.height // 2
+    
+    # White crosshair with black outline for visibility
+    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+        pygame.draw.line(surface, (0, 0, 0), 
+                        (center_x - 12 + dx, center_y + dy), 
+                        (center_x + 12 + dx, center_y + dy), 3)
+        pygame.draw.line(surface, (0, 0, 0),
+                        (center_x + dx, center_y - 12 + dy),
+                        (center_x + dx, center_y + 12 + dy), 3)
     pygame.draw.line(surface, (255, 255, 255), (center_x - 10, center_y), (center_x + 10, center_y), 2)
     pygame.draw.line(surface, (255, 255, 255), (center_x, center_y - 10), (center_x, center_y + 10), 2)
     
+    # Border
     pygame.draw.rect(surface, (100, 100, 100), rect, 2)
 
 
