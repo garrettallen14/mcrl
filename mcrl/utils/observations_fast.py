@@ -321,7 +321,7 @@ def get_observation_fused(state) -> dict:
         player.mining_progress.astype(jnp.float32),
     ], dtype=jnp.float32)
     
-    # === Log compass - direction to nearest log ===
+    # === Log compass - direction to nearest log (PLAYER-RELATIVE!) ===
     # Check positions around player for logs
     check_positions = pos_int[None, :] + _LOG_SEARCH_OFFSETS
     
@@ -353,22 +353,44 @@ def get_observation_fused(state) -> dict:
     nearest_idx = jnp.argmin(log_distances)
     nearest_dist = log_distances[nearest_idx]
     
-    # Direction to nearest log (normalized)
-    dir_vec = offsets_float[nearest_idx]
+    # Direction to nearest log in WORLD coords
+    dir_world = offsets_float[nearest_idx]
     dir_len = jnp.maximum(nearest_dist, 0.01)
-    dir_normalized = dir_vec / dir_len
+    dir_world_norm = dir_world / dir_len
+    
+    # Convert to PLAYER-RELATIVE coords (crucial for learning!)
+    # Player yaw: 0 = +Z, 90 = -X, 180 = -Z, 270 = +X
+    yaw_rad = player.rot[1] * (jnp.pi / 180.0)
+    cos_yaw = jnp.cos(yaw_rad)
+    sin_yaw = jnp.sin(yaw_rad)
+    
+    # Rotate world direction to player-relative
+    # forward = +Z in player space, right = +X in player space
+    world_x = dir_world_norm[0]  # World X offset
+    world_z = dir_world_norm[2]  # World Z offset
+    
+    # Player forward is (sin(yaw), cos(yaw)) in world XZ
+    # Dot with world direction to get forward component
+    forward = world_x * sin_yaw + world_z * cos_yaw  # How much is "forward"
+    right = world_x * cos_yaw - world_z * sin_yaw    # How much is "right"
+    up = dir_world_norm[1]  # Y is same in both coords
     
     # Zero direction if no log found
     found_log = nearest_dist < 999.0
-    dir_normalized = jnp.where(found_log, dir_normalized, 0.0)
+    forward = jnp.where(found_log, forward, 0.0)
+    right = jnp.where(found_log, right, 0.0)
+    up = jnp.where(found_log, up, 0.0)
     
     # Normalized distance (0 = at log, 1 = far)
     norm_dist = jnp.clip(nearest_dist / 30.0, 0.0, 1.0)
     
+    # Output: [forward, right, up, distance]
+    # If forward > 0, agent should go FORWARD
+    # If right > 0, agent should go RIGHT (or turn right)
     log_compass = jnp.array([
-        dir_normalized[0],
-        dir_normalized[1], 
-        dir_normalized[2],
+        forward,  # +1 = log is ahead, -1 = log is behind
+        right,    # +1 = log is to the right, -1 = log is to the left
+        up,       # +1 = log is above, -1 = log is below
         norm_dist
     ], dtype=jnp.float32)
     

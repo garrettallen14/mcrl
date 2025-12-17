@@ -649,10 +649,14 @@ def train(config: TrainConfig, verbose: bool = True, dashboard: bool = False):
                 else:
                     eta_str = "..."
                 
+                # More precision for KL, show policy_loss for debugging
+                kl_val = float(ppo_metrics.approx_kl)
+                kl_str = f"{kl_val:.6f}" if kl_val < 0.01 else f"{kl_val:.4f}"
                 print(f"[{elapsed:6.0f}s] Update {update:5d} | Step {total_steps:10,} ({100*progress:5.1f}%) | "
                       f"Reward {episode_rewards:7.2f} | "
                       f"Entropy {ppo_metrics.entropy_loss:.3f} | "
-                      f"KL {ppo_metrics.approx_kl:.4f} | "
+                      f"KL {kl_str} | "
+                      f"PL {ppo_metrics.policy_loss:.4f} | "
                       f"SPS {steps_per_sec:>8,.0f} | "
                       f"ETA {eta_str}")
     

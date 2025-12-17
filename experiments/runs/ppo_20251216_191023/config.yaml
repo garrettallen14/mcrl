@@ -1,0 +1,58 @@
+exploration:
+  intrinsic_coef: 0.5
+  intrinsic_decay: 0.9999
+  max_visit_count: 100000
+  random_action_decay_steps: 2000000
+  random_action_prob: 0.0
+  use_intrinsic: true
+logging:
+  eval_interval: 50
+  log_interval: 10
+  max_checkpoints: 5
+  profile_interval: 100
+  save_best: true
+  save_interval: 100
+  use_wandb: false
+  verbose: true
+  wandb_entity: null
+  wandb_project: mcrl
+max_episode_ticks: 18000
+network:
+  activation: relu
+  cnn_channels: !!python/tuple
+  - 64
+  - 128
+  - 256
+  embed_dim: 64
+  facing_hidden: 64
+  inventory_hidden: 128
+  num_block_types: 256
+  state_hidden: 64
+  trunk_hidden: 512
+num_envs: 512
+num_minibatches: 32
+num_steps: 64
+output_dir: experiments/runs
+ppo:
+  clip_advantages: 10.0
+  clip_eps: 0.2
+  clip_value: true
+  ent_coef: 0.05
+  ent_coef_final: 0.001
+  ent_decay_steps: 50000000
+  gae_lambda: 0.95
+  gamma: 0.999
+  lr: 0.001
+  lr_schedule: linear
+  max_grad_norm: 0.5
+  normalize_advantages: true
+  target_kl: null
+  vf_coef: 0.5
+run_name: ppo_20251216_191023
+seed: 42
+total_timesteps: 100000000
+update_epochs: 4
+world_size: !!python/tuple
+- 64
+- 64
+- 64
