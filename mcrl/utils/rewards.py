@@ -512,17 +512,17 @@ def calculate_simple_wood_reward(
     """
     Simple reward function for testing: Mine wood and craft planks.
     
-    Shaping Rewards (small, frequent):
-        - Getting closer to wood: +0.01 per block closer
-        - Looking at wood: +0.02
-        - Mining progress on wood: +0.05 per tick
-        - Adjacent to wood: +0.03
+    Shaping Rewards (frequent, guide behavior):
+        - Getting closer to wood: +0.1 per block closer (capped)
+        - Looking at wood: +0.1 per step
+        - Mining progress on wood: +0.3 per tick
+        - Adjacent to wood (≤2 blocks): +0.05 per step
     
-    Task Rewards (larger, milestone):
-        - Breaking any log block: +0.5
-        - First time getting log in inventory: +1.0
-        - First time getting planks: +2.0
-        - Crafting planks (inventory increase): +0.25 per plank
+    Task Rewards (larger milestones):
+        - Breaking any log block: +5.0
+        - First log in inventory: +10.0 (one-time)
+        - First planks crafted: +20.0 (one-time)
+        - Each plank crafted: +2.0
     
     Uses reward_flags bits:
         - bit 0: got first log
@@ -548,18 +548,18 @@ def calculate_simple_wood_reward(
     dist_improvement = prev_dist - curr_dist  # positive = got closer
     approach_reward = jnp.where(
         ~already_got_log.astype(jnp.bool_),
-        jnp.clip(dist_improvement * 0.02, -0.05, 0.1),  # +0.02 per block closer, capped
+        jnp.clip(dist_improvement * 0.1, -0.2, 0.5),  # +0.1 per block closer (10x stronger)
         0.0
     )
     total_reward = total_reward + approach_reward
     
     # ─────────────────────────────────────────────────────────────────────────
-    # SHAPING: Looking at wood
+    # SHAPING: Looking at wood (stronger signal)
     # ─────────────────────────────────────────────────────────────────────────
     facing_log = _is_facing_log(state.world.blocks, state.player.pos, state.player.rot)
     look_reward = jnp.where(
         facing_log & ~already_got_log.astype(jnp.bool_),
-        0.02,
+        0.1,  # 5x stronger
         0.0
     )
     total_reward = total_reward + look_reward
@@ -592,11 +592,11 @@ def calculate_simple_wood_reward(
         (mining_block_type == BlockType.SPRUCE_LOG)
     )
     
-    # Reward for making mining progress on log
+    # Reward for making mining progress on log (BIG reward - this is what we want!)
     progress_increased = state.player.mining_progress > prev_state.player.mining_progress
     mining_reward = jnp.where(
         mining_log & progress_increased & ~already_got_log.astype(jnp.bool_),
-        0.05,
+        0.3,  # 6x stronger - mining wood is the goal!
         0.0
     )
     total_reward = total_reward + mining_reward
@@ -606,24 +606,24 @@ def calculate_simple_wood_reward(
     # ─────────────────────────────────────────────────────────────────────────
     adjacent_reward = jnp.where(
         (curr_dist <= 2.0) & ~already_got_log.astype(jnp.bool_),
-        0.01,
+        0.05,  # 5x stronger
         0.0
     )
     total_reward = total_reward + adjacent_reward
     
     # ─────────────────────────────────────────────────────────────────────────
-    # TASK: Breaking a log
+    # TASK: Breaking a log (MAJOR milestone!)
     # ─────────────────────────────────────────────────────────────────────────
     is_log = (
         (block_just_broken == BlockType.OAK_LOG) |
         (block_just_broken == BlockType.BIRCH_LOG) |
         (block_just_broken == BlockType.SPRUCE_LOG)
     )
-    log_break_reward = jnp.where(is_log, 0.5, 0.0)
+    log_break_reward = jnp.where(is_log, 5.0, 0.0)  # 10x stronger!
     total_reward = total_reward + log_break_reward
     
     # ─────────────────────────────────────────────────────────────────────────
-    # TASK: First log pickup
+    # TASK: First log pickup (HUGE milestone!)
     # ─────────────────────────────────────────────────────────────────────────
     has_log = (
         has_item(state.player.inventory, ItemType.OAK_LOG, 1) |
@@ -631,16 +631,16 @@ def calculate_simple_wood_reward(
         has_item(state.player.inventory, ItemType.SPRUCE_LOG, 1)
     )
     first_log = has_log & ~already_got_log
-    total_reward = total_reward + jnp.where(first_log, 1.0, 0.0)
+    total_reward = total_reward + jnp.where(first_log, 10.0, 0.0)  # 10x stronger!
     flags = jnp.where(first_log, flags | (1 << 0), flags)
     
     # ─────────────────────────────────────────────────────────────────────────
-    # TASK: First planks
+    # TASK: First planks (ULTIMATE goal!)
     # ─────────────────────────────────────────────────────────────────────────
     has_planks = has_item(state.player.inventory, ItemType.OAK_PLANKS, 1)
     already_got_planks = (flags >> 1) & 1
     first_planks = has_planks & ~already_got_planks
-    total_reward = total_reward + jnp.where(first_planks, 2.0, 0.0)
+    total_reward = total_reward + jnp.where(first_planks, 20.0, 0.0)  # 10x stronger!
     flags = jnp.where(first_planks, flags | (1 << 1), flags)
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -661,7 +661,7 @@ def calculate_simple_wood_reward(
         0
     )
     planks_gained = jnp.maximum(curr_planks - prev_planks, 0)
-    craft_reward = planks_gained * 0.25  # +0.25 per plank crafted
+    craft_reward = planks_gained * 2.0  # +2.0 per plank crafted (8x stronger)
     total_reward = total_reward + craft_reward
     
     return total_reward, flags
